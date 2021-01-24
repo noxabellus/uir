@@ -1,0 +1,9 @@
+[package]
+name = "uir-llvm-backend"
+version = "0.1.0"
+authors = ["noxabellus <noxabellus@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+llvm-sys = "100"
+uir-core = { path = "../../core" }

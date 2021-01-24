@@ -1,7 +1,10 @@
-// #![feature(or_patterns)]
+// #![allow(incomplete_features)]
+// #![feature(specialization)]
 
 pub mod slotmap;
 
+pub mod src;
+pub mod ty;
 pub mod ir;
 
 
