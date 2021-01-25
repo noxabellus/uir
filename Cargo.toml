@@ -8,9 +8,10 @@ edition = "2018"
 path = "./lib.rs"
 
 [dependencies]
+support = { package = "uir-support", path = "./support" }
 core = { package = "uir-core", path = "./core" }
 llvm-backend = { package = "uir-llvm-backend", path = "./backends/llvm", optional = true }
 
 
 [workspace]
-members = [ "./core", "./backends/llvm" ]
+members = [ "./support", "./core", "./backends/llvm" ]

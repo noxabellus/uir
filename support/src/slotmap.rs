@@ -127,7 +127,7 @@ macro_rules! slotmap_keyable {
 		),+ $(,)?
 	) => {
 		$(
-			paste::paste! {
+			$crate::paste::paste! {
 				$crate::slotmap_key_ty! {
 					$($meta)*
 					pub struct [<$tyname Key>];
@@ -274,7 +274,7 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 		key
 	}
 
-	pub fn define (&mut self, key: K, val: V) -> bool {
+	pub fn define (&mut self, key: K, val: V) -> Option<KeyedMut<V>> {
 		let key = key.into();
 		let slot = self.slots[key.1 as usize];
 
@@ -283,11 +283,11 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 
 			if slot.is_none() {
 				slot.replace(val);
-				return true
+				return Some(KeyedMut { key: key.into(), value: slot.as_mut().unwrap() })
 			}
 		}
 
-		false
+		None
 	}
 
 	fn free_slot (&mut self, slot_idx: usize) {

@@ -1,8 +1,8 @@
 [package]
-name = "uir-core"
+name = "uir-support"
 version = "0.1.0"
 authors = ["noxabellus <noxabellus@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-support = { package = "uir-support", path = "../support" }
+paste = "1.0"

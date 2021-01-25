@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-crate::slotmap_keyable! { Src }
+support::slotmap_keyable! { Src }
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

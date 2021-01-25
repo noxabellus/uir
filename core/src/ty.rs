@@ -3,7 +3,7 @@ use std::ops;
 use super::src::SrcAttribution;
 
 
-crate::slotmap_keyable! { Ty, TyMeta }
+support::slotmap_keyable! { Ty, TyMeta }
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,4 +117,14 @@ impl ops::Deref for Ty {
 
 impl ops::DerefMut for Ty {
 	fn deref_mut (&mut self) -> &mut TyData { &mut self.data }
+}
+
+impl Ty {
+	pub fn equivalent	(&self, other: &Self) -> bool {
+		    other.data == self.data
+		&& (other.name.is_none()   || other.name   == self.name  )
+		&& (other.meta.is_empty()  || other.meta   == self.meta  )
+		&& (other.src.is_none()    || other.src    == self.src   )
+		&& (other.layout.is_none() || other.layout == self.layout)
+	}
 }
