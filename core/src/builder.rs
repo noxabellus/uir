@@ -1,5 +1,3 @@
-use std::ops;
-
 use support::{
 	slotmap::{ AsKey, Keyed, KeyedMut },
 };
@@ -66,19 +64,6 @@ pub struct Builder<'c> {
 	pub ctx: &'c mut Context,
 }
 
-impl<'c> ops::Deref for Builder<'c> {
-	type Target = Context;
-
-	fn deref (&self) -> &Context {
-		self.ctx
-	}
-}
-
-impl<'c> ops::DerefMut for Builder<'c> {
-	fn deref_mut (&mut self) -> &mut Context {
-		self.ctx
-	}
-}
 
 
 #[derive(Debug)]
@@ -93,24 +78,11 @@ pub struct FunctionBuilder<'b> {
 	pub active_src: Option<SrcAttribution>,
 }
 
-impl<'b> ops::Deref for FunctionBuilder<'b> {
-	type Target = Builder<'b>;
-
-	fn deref (&self) -> &Builder<'b> {
-		self.builder
-	}
-}
-
-impl<'b> ops::DerefMut for FunctionBuilder<'b> {
-	fn deref_mut (&mut self) -> &mut Builder<'b> {
-		self.builder
-	}
-}
 
 
 impl<'b> FunctionBuilder<'b> {
 	pub fn new<K: AsKey<TyKey>> (builder: &'b mut Builder<'b>) -> Self {
-		let function_key = builder.functions.reserve();
+		let function_key = builder.ctx.functions.reserve();
 
 		Self {
 			builder,
@@ -135,11 +107,11 @@ impl<'b> FunctionBuilder<'b> {
 		let mut cfg = Cfg::default();
 
 		self.generate_cfg(&mut cfg)?;
-		ty_checker::check(&mut self, &mut cfg)?;
+		self.type_check(&mut cfg)?;
 
 		self.function.cfg = cfg;
 
-		self.ctx.functions
+		self.builder.ctx.functions
 			.define(self.function_key, self.function)
 			.ok_or(IrErr::CannotFinalize)
 	}
@@ -164,7 +136,7 @@ impl<'b> FunctionBuilder<'b> {
 			parameter_tys.push(param.ty);
 		}
 
-		let ty = self.ctx.add_ty(TyData::Function { parameter_tys, result_ty }.into());
+		let ty = self.builder.ctx.add_ty(TyData::Function { parameter_tys, result_ty }.into());
 
 		self.function.ty = ty.as_key();
 
@@ -205,7 +177,7 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn type_check<'c> (&'b self, cfg: &'c mut Cfg) -> IrResult where 'c: 'b {
+	pub fn type_check (&self, cfg: &mut Cfg) -> IrResult {
 		ty_checker::check(self, cfg)?;
 		Ok(())
 	}
@@ -365,12 +337,12 @@ impl<'b> FunctionBuilder<'b> {
 
 	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<&Ty> {
 		let ty_key = ty_key.as_key();
-		self.ctx.tys.get(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
+		self.builder.ctx.tys.get(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
 	}
 
 	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<&mut Ty> {
 		let ty_key = ty_key.as_key();
-		self.ctx.tys.get_mut(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
+		self.builder.ctx.tys.get_mut(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
 	}
 
 

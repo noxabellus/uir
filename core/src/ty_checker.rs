@@ -204,7 +204,7 @@ impl<'r, 'b, 'c> TyChecker<'r, 'b, 'c> {
 }
 
 
-pub fn check<'b, 'c> (builder: &FunctionBuilder<'b>, cfg: &'c mut Cfg) -> TyCkResult {
+pub fn check (builder: &FunctionBuilder<'_>, cfg: &mut Cfg) -> TyCkResult {
 	let mut state = TyChecker::new(builder, cfg);
 
 	state.check_function()
