@@ -303,7 +303,7 @@ pub enum FunctionMeta {
 pub struct Global {
 	pub name: Option<String>,
 	pub ty: TyKey,
-	pub ir: Vec<Ir>,
+	pub ir: Option<ConstIr>,
 	pub src: Option<SrcAttribution>,
 	pub meta: Vec<GlobalMetaKey>,
 }
@@ -315,7 +315,7 @@ pub enum GlobalMeta {
 
 
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Meta {
 	pub ty: Slotmap<TyMetaKey, TyMeta>,
 	pub function: Slotmap<FunctionMetaKey, FunctionMeta>,
@@ -325,7 +325,7 @@ pub struct Meta {
 	pub ir: Slotmap<IrMetaKey, IrMeta>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Context {
 	pub target: Box<dyn Target>,
 
@@ -338,8 +338,19 @@ pub struct Context {
 	pub meta: Meta,
 }
 
+
+
 impl Context {
-	pub fn add_ty (&mut self, ty: Ty) -> KeyedMut<Ty> {
+	pub fn new () -> Self { Self::default() }
+
+	pub fn with_target<T: 'static + Target> (target: T) -> Self {
+		Self {
+			target: Box::new(target),
+			.. Self::default()
+		}
+	}
+
+	pub(crate) fn add_ty (&mut self, ty: Ty) -> KeyedMut<Ty> {
 		for (&key, existing_ty) in self.tys.iter_mut() {
 			if ty.equivalent(existing_ty) {
 				*existing_ty = ty; // handle populating meta data

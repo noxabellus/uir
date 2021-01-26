@@ -30,3 +30,9 @@ impl Target for X64Linux {
 		8
 	}
 }
+
+impl Default for Box<dyn Target> {
+	fn default () -> Self {
+		Box::new(crate::target::X64Linux)
+	}
+}

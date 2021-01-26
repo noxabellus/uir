@@ -1,8 +1,6 @@
-use std::{cell::Ref, ops::Deref};
+use std::{cell::Ref, ops::{self, Deref}};
 
-use support::{
-	slotmap::{ AsKey, Keyed, KeyedMut },
-};
+use support::{slotmap::{AsKey, Keyed, KeyedMut}};
 
 use crate::cfg_generator;
 
@@ -67,6 +65,369 @@ impl Default for InsertionCursor { fn default () -> Self { Self::End } }
 impl InsertionCursor {
 	pub fn take (&mut self) -> Self { let out = *self; *self = Self::default(); out }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+pub struct BlockManipulator<'a> (KeyedMut<'a, Block>);
+
+impl<'a> ops::Deref for BlockManipulator<'a> {
+	type Target = KeyedMut<'a, Block>;
+	fn deref (&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<'a> ops::DerefMut for BlockManipulator<'a> {
+	fn deref_mut	(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl<'a> AsRef<Block> for BlockManipulator<'a> {
+	fn as_ref (&self) -> &Block { self.value }
+}
+
+impl<'a> AsMut<Block> for BlockManipulator<'a> {
+	fn as_mut (&mut self) -> &mut Block { self.value }
+}
+
+impl<'a> AsKey<BlockKey> for BlockManipulator<'a> {
+	fn as_key(&self) -> BlockKey { self.0.as_key() }
+}
+
+impl<'a> BlockManipulator<'a> {
+	pub fn set_name (mut self, name: &str) -> Self {
+		self.name = Some(name.to_owned());
+		self
+	}
+
+	pub fn into_ref (self) -> &'a Block {
+		self.0.into_ref()
+	}
+
+	pub fn into_mut (self) -> &'a mut Block {
+		self.0.into_mut()
+	}
+}
+
+pub struct ParamManipulator<'a> (KeyedMut<'a, Param>);
+
+impl<'a> ops::Deref for ParamManipulator<'a> {
+	type Target = KeyedMut<'a, Param>;
+	fn deref (&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<'a> ops::DerefMut for ParamManipulator<'a> {
+	fn deref_mut	(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl<'a> AsRef<Param> for ParamManipulator<'a> {
+	fn as_ref (&self) -> &Param { self.value }
+}
+
+impl<'a> AsMut<Param> for ParamManipulator<'a> {
+	fn as_mut (&mut self) -> &mut Param { self.value }
+}
+
+impl<'a> AsKey<ParamKey> for ParamManipulator<'a> {
+	fn as_key(&self) -> ParamKey { self.0.as_key() }
+}
+
+impl<'a> ParamManipulator<'a> {
+	pub fn set_name (mut self, name: &str) -> Self {
+		self.name = Some(name.to_owned());
+		self
+	}
+
+	pub fn set_ty<K: AsKey<TyKey>> (mut self, ty: K) -> Self {
+		self.ty = ty.as_key();
+		self
+	}
+
+	pub fn set_src (mut self, src_attribution: SrcAttribution) -> Self {
+		self.src = Some(src_attribution);
+		self
+	}
+
+	pub fn clear_src (mut self) -> Self {
+		self.src = None;
+		self
+	}
+
+	pub fn add_meta (mut self, meta_key: ParamMetaKey) -> Self {
+		self.meta.push(meta_key);
+		self
+	}
+
+	pub fn into_ref (self) -> &'a Param {
+		self.0.into_ref()
+	}
+
+	pub fn into_mut (self) -> &'a mut Param {
+		self.0.into_mut()
+	}
+}
+
+
+
+pub struct LocalManipulator<'a> (KeyedMut<'a, Local>);
+
+impl<'a> ops::Deref for LocalManipulator<'a> {
+	type Target = KeyedMut<'a, Local>;
+	fn deref (&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<'a> ops::DerefMut for LocalManipulator<'a> {
+	fn deref_mut	(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl<'a> AsRef<Local> for LocalManipulator<'a> {
+	fn as_ref (&self) -> &Local { self.value }
+}
+
+impl<'a> AsMut<Local> for LocalManipulator<'a> {
+	fn as_mut (&mut self) -> &mut Local { self.value }
+}
+
+impl<'a> AsKey<LocalKey> for LocalManipulator<'a> {
+	fn as_key(&self) -> LocalKey { self.0.as_key() }
+}
+
+impl<'a> LocalManipulator<'a> {
+	pub fn set_name (mut self, name: &str) -> Self {
+		self.name = Some(name.to_owned());
+		self
+	}
+
+	pub fn set_ty<K: AsKey<TyKey>> (mut self, ty: K) -> Self {
+		self.ty = ty.as_key();
+		self
+	}
+
+	pub fn set_src (mut self, src_attribution: SrcAttribution) -> Self {
+		self.src = Some(src_attribution);
+		self
+	}
+
+	pub fn clear_src (mut self) -> Self {
+		self.src = None;
+		self
+	}
+
+	pub fn add_meta (mut self, meta_key: LocalMetaKey) -> Self {
+		self.meta.push(meta_key);
+		self
+	}
+
+	pub fn into_ref (self) -> &'a Local {
+		self.0.into_ref()
+	}
+
+	pub fn into_mut (self) -> &'a mut Local {
+		self.0.into_mut()
+	}
+}
+
+
+
+pub struct GlobalManipulator<'a> (KeyedMut<'a, Global>);
+
+impl<'a> ops::Deref for GlobalManipulator<'a> {
+	type Target = KeyedMut<'a, Global>;
+	fn deref (&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<'a> ops::DerefMut for GlobalManipulator<'a> {
+	fn deref_mut	(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl<'a> AsRef<Global> for GlobalManipulator<'a> {
+	fn as_ref (&self) -> &Global { self.value }
+}
+
+impl<'a> AsMut<Global> for GlobalManipulator<'a> {
+	fn as_mut (&mut self) -> &mut Global { self.value }
+}
+
+impl<'a> AsKey<GlobalKey> for GlobalManipulator<'a> {
+	fn as_key(&self) -> GlobalKey { self.0.as_key() }
+}
+
+impl<'a> GlobalManipulator<'a> {
+	pub fn set_name (mut self, name: &str) -> Self {
+		self.name = Some(name.to_owned());
+		self
+	}
+
+	pub fn set_ir (mut self, ir: ConstIr) -> Self {
+		self.ir = Some(ir);
+		self
+	}
+
+	pub fn set_ty<K: AsKey<TyKey>> (mut self, ty: K) -> Self {
+		self.ty = ty.as_key();
+		self
+	}
+
+	pub fn set_src (mut self, src_attribution: SrcAttribution) -> Self {
+		self.src = Some(src_attribution);
+		self
+	}
+
+	pub fn clear_src (mut self) -> Self {
+		self.src = None;
+		self
+	}
+
+	pub fn add_meta (mut self, meta_key: GlobalMetaKey) -> Self {
+		self.meta.push(meta_key);
+		self
+	}
+
+	pub fn into_ref (self) -> &'a Global {
+		self.0.into_ref()
+	}
+
+	pub fn into_mut (self) -> &'a mut Global {
+		self.0.into_mut()
+	}
+}
+
+
+pub struct TyManipulator<'a> (KeyedMut<'a, Ty>);
+
+impl<'a> ops::Deref for TyManipulator<'a> {
+	type Target = KeyedMut<'a, Ty>;
+	fn deref (&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<'a> ops::DerefMut for TyManipulator<'a> {
+	fn deref_mut	(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl<'a> AsRef<Ty> for TyManipulator<'a> {
+	fn as_ref (&self) -> &Ty { self.value }
+}
+
+impl<'a> AsMut<Ty> for TyManipulator<'a> {
+	fn as_mut (&mut self) -> &mut Ty { self.value }
+}
+
+impl<'a> AsKey<TyKey> for TyManipulator<'a> {
+	fn as_key(&self) -> TyKey { self.0.as_key() }
+}
+
+impl<'a> TyManipulator<'a> {
+	pub fn set_name (mut self, name: &str) -> Self {
+		self.name = Some(name.to_owned());
+		self
+	}
+
+	pub fn set_src (mut self, src_attribution: SrcAttribution) -> Self {
+		self.src = Some(src_attribution);
+		self
+	}
+
+	pub fn clear_src (mut self) -> Self {
+		self.src = None;
+		self
+	}
+
+	pub fn add_meta (mut self, meta_key: TyMetaKey) -> Self {
+		self.meta.push(meta_key);
+		self
+	}
+
+	pub fn into_ref (self) -> &'a Ty {
+		self.0.into_ref()
+	}
+
+	pub fn into_mut (self) -> &'a mut Ty {
+		self.0.into_mut()
+	}
+}
+
+
+pub struct IrManipulator<'a> (&'a mut Ir);
+
+impl<'a> ops::Deref for IrManipulator<'a> {
+	type Target = &'a mut Ir;
+	fn deref (&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<'a> ops::DerefMut for IrManipulator<'a> {
+	fn deref_mut	(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl<'a> IrManipulator<'a> {
+	pub fn set_name (mut self, name: &str) -> Self {
+		self.name = Some(name.to_owned());
+		self
+	}
+
+	pub fn set_src (mut self, src_attribution: SrcAttribution) -> Self {
+		self.src = Some(src_attribution);
+		self
+	}
+
+	pub fn clear_src (mut self) -> Self {
+		self.src = None;
+		self
+	}
+
+	pub fn add_meta (mut self, meta_key: IrMetaKey) -> Self {
+		self.meta.push(meta_key);
+		self
+	}
+
+	pub fn into_ref (self) -> &'a Ir {
+		self.0
+	}
+
+	pub fn into_mut (self) -> &'a mut Ir {
+		self.0
+	}
+}
+
+
+
+
+
+
+
+
+
+
 
 #[derive(Debug, Default)]
 pub struct TyDict {
@@ -152,27 +513,27 @@ impl<'c> Builder<'c> {
 	pub fn real64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.real64).unwrap() }
 
 
-	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<KeyedMut<Ty>> {
+	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<TyManipulator> {
 		let target_ty = self.get_ty(target_ty)?.as_key();
 
-		Ok(self.ctx.add_ty(TyData::Pointer { target_ty }.into()))
+		Ok(TyManipulator(self.ctx.add_ty(TyData::Pointer { target_ty }.into())))
 	}
 
-	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<KeyedMut<Ty>> {
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<TyManipulator> {
 		let element_ty = self.get_ty(element_ty)?.as_key();
 
-		Ok(self.ctx.add_ty(TyData::Array { length, element_ty }.into()))
+		Ok(TyManipulator(self.ctx.add_ty(TyData::Array { length, element_ty }.into())))
 	}
 
-	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<KeyedMut<Ty>> {
+	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<TyManipulator> {
 		for &ft in field_tys.iter() {
 			self.get_ty(ft)?;
 		}
 
-		Ok(self.ctx.add_ty(TyData::Structure { field_tys }.into()))
+		Ok(TyManipulator(self.ctx.add_ty(TyData::Structure { field_tys }.into())))
 	}
 
-	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<KeyedMut<Ty>> {
+	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<TyManipulator> {
 		for &pt in parameter_tys.iter() {
 			self.get_ty(pt)?;
 		}
@@ -181,7 +542,7 @@ impl<'c> Builder<'c> {
 			self.get_ty(rt)?;
 		}
 
-		Ok(self.ctx.add_ty(TyData::Function { parameter_tys, result_ty}.into()))
+		Ok(TyManipulator(self.ctx.add_ty(TyData::Function { parameter_tys, result_ty}.into())))
 	}
 
 
@@ -220,10 +581,10 @@ impl<'c> Builder<'c> {
 		self.ctx.globals.get_keyed(global_key).ok_or(IrErr::InvalidGlobalKey(global_key))
 	}
 
-	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<KeyedMut<Global>> {
+	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<GlobalManipulator> {
 		let global_key = global_key.as_key();
 
-		self.ctx.globals.get_keyed_mut(global_key).ok_or(IrErr::InvalidGlobalKey(global_key))
+		self.ctx.globals.get_keyed_mut(global_key).ok_or(IrErr::InvalidGlobalKey(global_key)).map(GlobalManipulator)
 	}
 
 
@@ -318,6 +679,17 @@ impl<'c> Builder<'c> {
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
 #[derive(Debug)]
 pub struct FunctionBuilder<'b> {
 	builder: &'b mut Builder<'b>,
@@ -408,7 +780,7 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn generate_own_ty (&mut self) -> IrResult<KeyedMut<Ty>> {
+	pub fn generate_own_ty (&mut self) -> IrResult<TyManipulator> {
 		let result_ty = if let Some(result_ty) = self.function.result {
 			self.builder.get_ty(result_ty)?;
 			Some(result_ty)
@@ -463,16 +835,16 @@ impl<'b> FunctionBuilder<'b> {
 	pub fn real32_ty (&self) -> Keyed<Ty> { self.builder.real32_ty() }
 	pub fn real64_ty (&self) -> Keyed<Ty> { self.builder.real64_ty() }
 
-	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<KeyedMut<Ty>> { self.builder.pointer_ty(target_ty) }
-	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<KeyedMut<Ty>> { self.builder.array_ty(length, element_ty) }
-	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<KeyedMut<Ty>> { self.builder.structure_ty(field_tys) }
-	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<KeyedMut<Ty>> { self.builder.function_ty(parameter_tys, result_ty) }
+	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<TyManipulator> { self.builder.pointer_ty(target_ty) }
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<TyManipulator> { self.builder.array_ty(length, element_ty) }
+	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<TyManipulator> { self.builder.structure_ty(field_tys) }
+	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<TyManipulator> { self.builder.function_ty(parameter_tys, result_ty) }
 
 	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Keyed<Ty>> { self.builder.get_ty(ty_key) }
 	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<KeyedMut<Ty>> { self.builder.get_ty_mut(ty_key) }
 
 	pub fn get_global<K: AsKey<GlobalKey>> (&self, global_key: K) -> IrResult<Keyed<Global>> { self.builder.get_global(global_key) }
-	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<KeyedMut<Global>> { self.builder.get_global_mut(global_key) }
+	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<GlobalManipulator> { self.builder.get_global_mut(global_key) }
 
 	pub fn get_function<K: AsKey<FunctionKey>> (&self, function_key: K) -> IrResult<Keyed<Function>> {
 		let function_key = function_key.as_key();
@@ -502,10 +874,10 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn make_local<K: AsKey<TyKey>> (&mut self, ty_key: K) -> KeyedMut<Local> {
+	pub fn make_local<K: AsKey<TyKey>> (&mut self, ty_key: K) -> LocalManipulator {
 		let ty = ty_key.as_key();
 
-		self.function.locals.insert(Local { ty, .. Local::default() })
+		LocalManipulator(self.function.locals.insert(Local { ty, .. Local::default() }))
 	}
 
 	pub fn get_local<K: AsKey<LocalKey>> (&self, local_key: K) -> IrResult<Keyed<Local>> {
@@ -514,26 +886,26 @@ impl<'b> FunctionBuilder<'b> {
 		self.function.locals.get_keyed(local_key).ok_or(IrErr::InvalidLocalKey(local_key))
 	}
 
-	pub fn get_local_mut<K: AsKey<LocalKey>> (&mut self, local_key: K) -> IrResult<KeyedMut<Local>> {
+	pub fn get_local_mut<K: AsKey<LocalKey>> (&mut self, local_key: K) -> IrResult<LocalManipulator> {
 		let local_key = local_key.as_key();
 
-		self.function.locals.get_keyed_mut(local_key).ok_or(IrErr::InvalidLocalKey(local_key))
+		self.function.locals.get_keyed_mut(local_key).ok_or(IrErr::InvalidLocalKey(local_key)).map(LocalManipulator)
 	}
 
 
 
 
-	pub fn append_param<K: AsKey<TyKey>> (&mut self, ty_key: K) -> KeyedMut<Param> {
+	pub fn append_param<K: AsKey<TyKey>> (&mut self, ty_key: K) -> ParamManipulator {
 		let ty = ty_key.as_key();
 
 		let param = self.function.param_data.insert(Param { ty, .. Param::default() });
 
 		self.function.param_order.push(param.as_key());
 
-		param
+		ParamManipulator(param)
 	}
 
-	pub fn insert_param<K: AsKey<TyKey>> (&mut self, idx: usize, ty_key: K) -> IrResult<KeyedMut<Param>> {
+	pub fn insert_param<K: AsKey<TyKey>> (&mut self, idx: usize, ty_key: K) -> IrResult<ParamManipulator> {
 		let ty = ty_key.as_key();
 
 		if idx > self.function.param_order.len() { return Err(IrErr::InvalidParamIndex(idx)) }
@@ -542,7 +914,7 @@ impl<'b> FunctionBuilder<'b> {
 
 		self.function.param_order.insert(idx, param.as_key());
 
-		Ok(param)
+		Ok(ParamManipulator(param))
 	}
 
 	pub fn remove_param<K: AsKey<ParamKey>> (&mut self, param_key: K) -> IrResult<Param> {
@@ -632,36 +1004,36 @@ impl<'b> FunctionBuilder<'b> {
 		self.function.param_data.get_keyed(param_key).ok_or(IrErr::InvalidParamKey(param_key))
 	}
 
-	pub fn get_param_mut<K: AsKey<ParamKey>> (&mut self, param_key: K) -> IrResult<KeyedMut<Param>> {
+	pub fn get_param_mut<K: AsKey<ParamKey>> (&mut self, param_key: K) -> IrResult<ParamManipulator> {
 		let param_key = param_key.as_key();
 
-		self.function.param_data.get_keyed_mut(param_key).ok_or(IrErr::InvalidParamKey(param_key))
+		self.function.param_data.get_keyed_mut(param_key).ok_or(IrErr::InvalidParamKey(param_key)).map(ParamManipulator)
 	}
 
 
 
 
-	pub fn append_block (&mut self, block: Block) -> KeyedMut<Block> {
+	pub fn append_block (&mut self, block: Block) -> BlockManipulator {
 		let block = self.function.block_data.insert(block);
 		self.function.block_order.push(block.as_key());
-		block
+		BlockManipulator(block)
 	}
 
-	pub fn insert_block (&mut self, idx: usize, block: Block) -> IrResult<KeyedMut<Block>> {
+	pub fn insert_block (&mut self, idx: usize, block: Block) -> IrResult<BlockManipulator> {
 		if idx > self.function.block_order.len() { return Err(IrErr::InvalidBlockIndex(idx)) }
 
 		let block = self.function.block_data.insert(block);
 
 		self.function.block_order.insert(idx, block.as_key());
 
-		Ok(block)
+		Ok(BlockManipulator(block))
 	}
 
-	pub fn append_new_block (&mut self) -> KeyedMut<Block> {
+	pub fn append_new_block (&mut self) -> BlockManipulator {
 		self.append_block(Block::default())
 	}
 
-	pub fn insert_new_block (&mut self, idx: usize) -> IrResult<KeyedMut<Block>> {
+	pub fn insert_new_block (&mut self, idx: usize) -> IrResult<BlockManipulator> {
 		self.insert_block(idx, Block::default())
 	}
 
@@ -756,9 +1128,9 @@ impl<'b> FunctionBuilder<'b> {
 		self.function.block_data.get_keyed(block_key).ok_or(IrErr::InvalidBlockKey(block_key))
 	}
 
-	pub fn get_block_mut<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrResult<KeyedMut<Block>> {
+	pub fn get_block_mut<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrResult<BlockManipulator> {
 		let block_key = block_key.as_key();
-		self.function.block_data.get_keyed_mut(block_key).ok_or(IrErr::InvalidBlockKey(block_key))
+		self.function.block_data.get_keyed_mut(block_key).ok_or(IrErr::InvalidBlockKey(block_key)).map(BlockManipulator)
 	}
 
 	pub fn get_active_block_key (&self) -> IrResult<BlockKey> {
@@ -769,7 +1141,7 @@ impl<'b> FunctionBuilder<'b> {
 		self.get_block(self.get_active_block_key()?)
 	}
 
-	pub fn get_active_block_mut (&mut self) -> IrResult<KeyedMut<Block>> {
+	pub fn get_active_block_mut (&mut self) -> IrResult<BlockManipulator> {
 		self.get_block_mut(self.get_active_block_key()?)
 	}
 
@@ -825,7 +1197,7 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn append_node<I: Into<Ir>> (&mut self, i: I) -> IrResult<&mut Ir> {
+	pub fn append_node<I: Into<Ir>> (&mut self, i: I) -> IrResult<IrManipulator> {
 		let mut node = i.into();
 
 		if node.src.is_none() {
@@ -844,10 +1216,10 @@ impl<'b> FunctionBuilder<'b> {
 
 		block.ir.push(node);
 
-		Ok(unsafe { block.into_mut().ir.get_unchecked_mut(idx) })
+		Ok(IrManipulator(unsafe { block.into_mut().ir.get_unchecked_mut(idx) }))
 	}
 
-	pub fn insert_node<I: Into<Ir>> (&mut self, idx: usize, i: I) -> IrResult<&mut Ir> {
+	pub fn insert_node<I: Into<Ir>> (&mut self, idx: usize, i: I) -> IrResult<IrManipulator> {
 		if idx > self.get_active_block()?.ir.len() {
 			return Err(IrErr::InvalidNodeIndex(idx))
 		}
@@ -868,10 +1240,10 @@ impl<'b> FunctionBuilder<'b> {
 
 		block.ir.insert(idx, node);
 
-		Ok(unsafe { block.into_mut().ir.get_unchecked_mut(idx) })
+		Ok(IrManipulator(unsafe { block.into_mut().ir.get_unchecked_mut(idx) }))
 	}
 
-	pub fn write_node<I: Into<Ir>> (&mut self, i: I) -> IrResult<&mut Ir> {
+	pub fn write_node<I: Into<Ir>> (&mut self, i: I) -> IrResult<IrManipulator> {
 		let mut node = i.into();
 
 		if node.src.is_none() {
@@ -891,7 +1263,7 @@ impl<'b> FunctionBuilder<'b> {
 
 		block.ir.insert(idx, node);
 
-		Ok(unsafe { block.into_mut().ir.get_unchecked_mut(idx) })
+		Ok(IrManipulator(unsafe { block.into_mut().ir.get_unchecked_mut(idx) }))
 	}
 
 	pub fn remove_node (&mut self, idx: usize) -> IrResult<Ir> {
@@ -973,143 +1345,143 @@ impl<'b> FunctionBuilder<'b> {
 		self.get_active_block()?.into_ref().ir.get(idx).ok_or(IrErr::InvalidNodeIndex(idx))
 	}
 
-	pub fn get_node_mut (&mut self, idx: usize) -> IrResult<&mut Ir> {
-		self.get_active_block_mut()?.into_mut().ir.get_mut(idx).ok_or(IrErr::InvalidNodeIndex(idx))
+	pub fn get_node_mut (&mut self, idx: usize) -> IrResult<IrManipulator> {
+		self.get_active_block_mut()?.into_mut().ir.get_mut(idx).ok_or(IrErr::InvalidNodeIndex(idx)).map(IrManipulator)
 	}
 
 
-	pub fn constant (&mut self, constant: Constant) -> IrResult<&mut Ir> { self.write_node(IrData::Constant(constant)) }
+	pub fn constant (&mut self, constant: Constant) -> IrResult<IrManipulator> { self.write_node(IrData::Constant(constant)) }
 
-	pub fn const_null<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<&mut Ir> { self.constant(Constant::Null(ty_key.as_key())) }
-	pub fn const_bool (&mut self, value: bool) -> IrResult<&mut Ir> { self.constant(Constant::Bool(value)) }
-	pub fn const_sint8 (&mut self, value: i8) -> IrResult<&mut Ir> { self.constant(Constant::SInt8(value)) }
-	pub fn const_sint16 (&mut self, value: i16) -> IrResult<&mut Ir> { self.constant(Constant::SInt16(value)) }
-	pub fn const_sint32 (&mut self, value: i32) -> IrResult<&mut Ir> { self.constant(Constant::SInt32(value)) }
-	pub fn const_sint64 (&mut self, value: i64) -> IrResult<&mut Ir> { self.constant(Constant::SInt64(value)) }
-	pub fn const_sint128 (&mut self, value: i128) -> IrResult<&mut Ir> { self.constant(Constant::SInt128(value)) }
-	pub fn const_uint8 (&mut self, value: u8) -> IrResult<&mut Ir> { self.constant(Constant::UInt8(value)) }
-	pub fn const_uint16 (&mut self, value: u16) -> IrResult<&mut Ir> { self.constant(Constant::UInt16(value)) }
-	pub fn const_uint32 (&mut self, value: u32) -> IrResult<&mut Ir> { self.constant(Constant::UInt32(value)) }
-	pub fn const_uint64 (&mut self, value: u64) -> IrResult<&mut Ir> { self.constant(Constant::UInt64(value)) }
-	pub fn const_uint128 (&mut self, value: u128) -> IrResult<&mut Ir> { self.constant(Constant::UInt128(value)) }
-	pub fn const_real32 (&mut self, value: f32) -> IrResult<&mut Ir> { self.constant(Constant::Real32(value)) }
-	pub fn const_real64 (&mut self, value: f64) -> IrResult<&mut Ir> { self.constant(Constant::Real64(value)) }
+	pub fn const_null<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<IrManipulator> { self.constant(Constant::Null(ty_key.as_key())) }
+	pub fn const_bool (&mut self, value: bool) -> IrResult<IrManipulator> { self.constant(Constant::Bool(value)) }
+	pub fn const_sint8 (&mut self, value: i8) -> IrResult<IrManipulator> { self.constant(Constant::SInt8(value)) }
+	pub fn const_sint16 (&mut self, value: i16) -> IrResult<IrManipulator> { self.constant(Constant::SInt16(value)) }
+	pub fn const_sint32 (&mut self, value: i32) -> IrResult<IrManipulator> { self.constant(Constant::SInt32(value)) }
+	pub fn const_sint64 (&mut self, value: i64) -> IrResult<IrManipulator> { self.constant(Constant::SInt64(value)) }
+	pub fn const_sint128 (&mut self, value: i128) -> IrResult<IrManipulator> { self.constant(Constant::SInt128(value)) }
+	pub fn const_uint8 (&mut self, value: u8) -> IrResult<IrManipulator> { self.constant(Constant::UInt8(value)) }
+	pub fn const_uint16 (&mut self, value: u16) -> IrResult<IrManipulator> { self.constant(Constant::UInt16(value)) }
+	pub fn const_uint32 (&mut self, value: u32) -> IrResult<IrManipulator> { self.constant(Constant::UInt32(value)) }
+	pub fn const_uint64 (&mut self, value: u64) -> IrResult<IrManipulator> { self.constant(Constant::UInt64(value)) }
+	pub fn const_uint128 (&mut self, value: u128) -> IrResult<IrManipulator> { self.constant(Constant::UInt128(value)) }
+	pub fn const_real32 (&mut self, value: f32) -> IrResult<IrManipulator> { self.constant(Constant::Real32(value)) }
+	pub fn const_real64 (&mut self, value: f64) -> IrResult<IrManipulator> { self.constant(Constant::Real64(value)) }
 
 
 
-	pub fn build_aggregate<K: AsKey<TyKey>> (&mut self, ty_key: K, indices: Vec<u64>) -> IrResult<&mut Ir> {
+	pub fn build_aggregate<K: AsKey<TyKey>> (&mut self, ty_key: K, indices: Vec<u64>) -> IrResult<IrManipulator> {
 		let ty_key = ty_key.as_key();
 
 		self.write_node(IrData::BuildAggregate(ty_key, indices))
 	}
 
-	pub fn global_key<K: AsKey<GlobalKey>> (&mut self, key: K) -> IrResult<&mut Ir> {
+	pub fn global_key<K: AsKey<GlobalKey>> (&mut self, key: K) -> IrResult<IrManipulator> {
 		let key = key.as_key();
 
 		self.write_node(IrData::GlobalKey(key))
 	}
 
-	pub fn function_key<K: AsKey<FunctionKey>> (&mut self, key: K) -> IrResult<&mut Ir> {
+	pub fn function_key<K: AsKey<FunctionKey>> (&mut self, key: K) -> IrResult<IrManipulator> {
 		let key = key.as_key();
 
 		self.write_node(IrData::FunctionKey(key))
 	}
 
-	pub fn block_key<K: AsKey<BlockKey>> (&mut self, key: K) -> IrResult<&mut Ir> {
+	pub fn block_key<K: AsKey<BlockKey>> (&mut self, key: K) -> IrResult<IrManipulator> {
 		let key = key.as_key();
 
 		self.write_node(IrData::BlockKey(key))
 	}
 
-	pub fn arg_key<K: AsKey<ParamKey>> (&mut self, key: K) -> IrResult<&mut Ir> {
+	pub fn param_key<K: AsKey<ParamKey>> (&mut self, key: K) -> IrResult<IrManipulator> {
 		let key = key.as_key();
 
 		self.write_node(IrData::ParamKey(key))
 	}
 
-	pub fn local_key<K: AsKey<LocalKey>> (&mut self, key: K) -> IrResult<&mut Ir> {
+	pub fn local_key<K: AsKey<LocalKey>> (&mut self, key: K) -> IrResult<IrManipulator> {
 		let key = key.as_key();
 
 		self.write_node(IrData::LocalKey(key))
 	}
 
 
-	pub fn phi<K: AsKey<TyKey>> (&mut self, key: K) -> IrResult<&mut Ir> {
+	pub fn phi<K: AsKey<TyKey>> (&mut self, key: K) -> IrResult<IrManipulator> {
 		let key = key.as_key();
 
 		self.write_node(IrData::Phi(key))
 	}
 
 
-	pub fn binary_op (&mut self, op: BinaryOp) -> IrResult<&mut Ir> {
+	pub fn binary_op (&mut self, op: BinaryOp) -> IrResult<IrManipulator> {
 		self.write_node(IrData::BinaryOp(op))
 	}
 
-	pub fn unary_op (&mut self, op: UnaryOp) -> IrResult<&mut Ir> {
+	pub fn unary_op (&mut self, op: UnaryOp) -> IrResult<IrManipulator> {
 		self.write_node(IrData::UnaryOp(op))
 	}
 
-	pub fn cast_op<K: AsKey<TyKey>> (&mut self, op: CastOp, ty_key: K) -> IrResult<&mut Ir> {
+	pub fn cast_op<K: AsKey<TyKey>> (&mut self, op: CastOp, ty_key: K) -> IrResult<IrManipulator> {
 		let ty_key = ty_key.as_key();
 
 		self.write_node(IrData::CastOp(op, ty_key))
 	}
 
 
-	pub fn gep (&mut self, num_indices: u64) -> IrResult<&mut Ir> {
+	pub fn gep (&mut self, num_indices: u64) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Gep(num_indices))
 	}
 
-	pub fn load (&mut self) -> IrResult<&mut Ir> {
+	pub fn load (&mut self) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Load)
 	}
 
-	pub fn store (&mut self) -> IrResult<&mut Ir> {
+	pub fn store (&mut self) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Store)
 	}
 
 
-	pub fn branch<K: AsKey<BlockKey>> (&mut self,	destination: K) -> IrResult<&mut Ir> {
+	pub fn branch<K: AsKey<BlockKey>> (&mut self,	destination: K) -> IrResult<IrManipulator> {
 		let destination = destination.as_key();
 
 		self.write_node(IrData::Branch(destination))
 	}
 
-	pub fn cond_branch<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, then_block: KA, else_block: KB) -> IrResult<&mut Ir> {
+	pub fn cond_branch<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, then_block: KA, else_block: KB) -> IrResult<IrManipulator> {
 		let then_block = then_block.as_key();
 		let else_block = else_block.as_key();
 
 		self.write_node(IrData::CondBranch(then_block, else_block))
 	}
 
-	pub fn switch (&mut self, case_blocks: Vec<(ConstIr, BlockKey)>) -> IrResult<&mut Ir> {
+	pub fn switch (&mut self, case_blocks: Vec<(ConstIr, BlockKey)>) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Switch(case_blocks))
 	}
 
-	pub fn computed_branch (&mut self, destinations: Vec<BlockKey>) -> IrResult<&mut Ir> {
+	pub fn computed_branch (&mut self, destinations: Vec<BlockKey>) -> IrResult<IrManipulator> {
 		self.write_node(IrData::ComputedBranch(destinations))
 	}
 
 
-	pub fn call (&mut self) -> IrResult<&mut Ir> {
+	pub fn call (&mut self) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Call)
 	}
 
-	pub fn ret (&mut self) -> IrResult<&mut Ir> {
+	pub fn ret (&mut self) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Ret)
 	}
 
 
-	pub fn duplicate (&mut self) -> IrResult<&mut Ir> {
+	pub fn duplicate (&mut self) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Duplicate)
 	}
 
-	pub fn discard (&mut self) -> IrResult<&mut Ir> {
+	pub fn discard (&mut self) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Discard)
 	}
 
 
-	pub fn unreachable (&mut self) -> IrResult<&mut Ir> {
+	pub fn unreachable (&mut self) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Unreachable)
 	}
 }
