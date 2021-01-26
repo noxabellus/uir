@@ -10,7 +10,7 @@ use super::{
 	ir::BlockKey,
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Cfg {
 	in_values: HashMap<BlockKey, Vec<TyKey>>,
 	in_edges: HashMap<BlockKey, Vec<BlockKey>>,

@@ -1,6 +1,10 @@
+use std::{cell::Ref, ops::Deref};
+
 use support::{
 	slotmap::{ AsKey, Keyed, KeyedMut },
 };
+
+use crate::cfg_generator;
 
 use super::{
 	src::*,
@@ -22,21 +26,27 @@ pub enum IrErr {
 	InvalidBlockKey(BlockKey),
 	InvalidBlockIndex(usize),
 	InvalidTyKey(TyKey),
+	InvalidGlobalKey(GlobalKey),
+	InvalidFunctionKey(FunctionKey),
 	InvalidNodeIndex(usize),
 	CfgErr(CfgErr),
 	TyErr(TyErr),
 	NodeAfterTerminator(BlockKey, usize),
-	CannotFinalize
+	FunctionAlreadyDefined(FunctionKey),
 }
 
 impl From<CfgErr> for IrErr {
 	fn from (e: CfgErr) -> IrErr { IrErr::CfgErr(e) }
 }
 
+impl From<TyErr> for IrErr {
+	fn from (e: TyErr) -> IrErr { IrErr::TyErr(e) }
+}
+
 impl From<TyCkErr> for IrErr {
 	fn from (e: TyCkErr) -> IrErr {
 		match e {
-			TyCkErr::TyErr(e) => IrErr::TyErr(e),
+			TyCkErr::TyErr(e) => e.into(),
 			TyCkErr::IrErr(e) => e
 		}
 	}
@@ -58,30 +68,272 @@ impl InsertionCursor {
 	pub fn take (&mut self) -> Self { let out = *self; *self = Self::default(); out }
 }
 
+#[derive(Debug, Default)]
+pub struct TyDict {
+	void: TyKey,
+	block: TyKey,
+	bool: TyKey,
+	sint8: TyKey, sint16: TyKey, sint32: TyKey, sint64: TyKey, sint128: TyKey,
+	uint8: TyKey, uint16: TyKey, uint32: TyKey, uint64: TyKey, uint128: TyKey,
+	real32: TyKey, real64: TyKey,
+}
 
 #[derive(Debug)]
 pub struct Builder<'c> {
-	pub ctx: &'c mut Context,
+	ctx: &'c mut Context,
+	tys: TyDict,
 }
 
+
+impl<'c> Builder<'c> {
+	pub fn new (ctx: &'c mut Context) -> Self {
+		macro_rules! prims {
+			($(
+				($name:ident : $($tt:tt)+)
+			),+ $(,)?) => {
+				TyDict {
+					$(
+						$name: prims!(#ELEM# $name : $($tt)+)
+					),+
+				}
+			};
+
+			(#ELEM# $name:ident : $ty:ident) => {
+				ctx.add_ty(Ty {
+					data: TyData::Primitive(PrimitiveTy::$ty),
+					name: Some(stringify!($name).to_owned()),
+					.. Ty::default()
+				}).as_key()
+			};
+
+
+			(#ELEM# $name:ident : $expr:expr) => {
+				ctx.add_ty(Ty {
+					data: $expr,
+					name: Some(stringify!($name).to_owned()),
+					.. Ty::default()
+				}).as_key()
+			};
+		}
+
+		let tys = prims! [
+			(void: TyData::Void),
+			(block: TyData::Block),
+			(bool: Bool),
+			(sint8: SInt8), (sint16: SInt16), (sint32: SInt32), (sint64: SInt64), (sint128: SInt128),
+			(uint8: UInt8), (uint16: UInt16), (uint32: UInt32), (uint64: UInt64), (uint128: UInt128),
+			(real32: Real32), (real64: Real64),
+		];
+
+
+
+		Self { ctx, tys }
+	}
+
+
+	pub fn void_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.void).unwrap() }
+	pub fn block_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.block).unwrap() }
+
+	pub fn bool_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.bool).unwrap() }
+
+	pub fn sint8_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint8).unwrap() }
+	pub fn sint16_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint16).unwrap() }
+	pub fn sint32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint32).unwrap() }
+	pub fn sint64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint64).unwrap() }
+	pub fn sint128_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint128).unwrap() }
+
+	pub fn uint8_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint8).unwrap() }
+	pub fn uint16_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint16).unwrap() }
+	pub fn uint32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint32).unwrap() }
+	pub fn uint64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint64).unwrap() }
+	pub fn uint128_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint128).unwrap() }
+
+	pub fn real32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.real32).unwrap() }
+	pub fn real64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.real64).unwrap() }
+
+
+	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<KeyedMut<Ty>> {
+		let target_ty = self.get_ty(target_ty)?.as_key();
+
+		Ok(self.ctx.add_ty(TyData::Pointer { target_ty }.into()))
+	}
+
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<KeyedMut<Ty>> {
+		let element_ty = self.get_ty(element_ty)?.as_key();
+
+		Ok(self.ctx.add_ty(TyData::Array { length, element_ty }.into()))
+	}
+
+	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<KeyedMut<Ty>> {
+		for &ft in field_tys.iter() {
+			self.get_ty(ft)?;
+		}
+
+		Ok(self.ctx.add_ty(TyData::Structure { field_tys }.into()))
+	}
+
+	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<KeyedMut<Ty>> {
+		for &pt in parameter_tys.iter() {
+			self.get_ty(pt)?;
+		}
+
+		if let Some(rt) = result_ty {
+			self.get_ty(rt)?;
+		}
+
+		Ok(self.ctx.add_ty(TyData::Function { parameter_tys, result_ty}.into()))
+	}
+
+
+
+	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Keyed<Ty>> {
+		let ty_key = ty_key.as_key();
+
+		self.ctx.tys.get_keyed(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
+	}
+
+	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<KeyedMut<Ty>> {
+		let ty_key = ty_key.as_key();
+
+		self.ctx.tys.get_keyed_mut(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
+	}
+
+
+	pub fn get_finalized_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Keyed<Ty>> {
+		let ty_key = ty_key.as_key();
+
+		self.finalize_ty(ty_key)?;
+		self.get_ty(ty_key)
+	}
+
+	pub fn get_finalized_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<KeyedMut<Ty>> {
+		let ty_key = ty_key.as_key();
+
+		self.finalize_ty(ty_key)?;
+		self.get_ty_mut(ty_key)
+	}
+
+
+	pub fn get_global<K: AsKey<GlobalKey>> (&self, global_key: K) -> IrResult<Keyed<Global>> {
+		let global_key = global_key.as_key();
+
+		self.ctx.globals.get_keyed(global_key).ok_or(IrErr::InvalidGlobalKey(global_key))
+	}
+
+	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<KeyedMut<Global>> {
+		let global_key = global_key.as_key();
+
+		self.ctx.globals.get_keyed_mut(global_key).ok_or(IrErr::InvalidGlobalKey(global_key))
+	}
+
+
+	pub fn get_function<K: AsKey<FunctionKey>> (&self, function_key: K) -> IrResult<Keyed<Function>> {
+		let function_key = function_key.as_key();
+
+		self.ctx.functions.get_keyed(function_key).ok_or(IrErr::InvalidFunctionKey(function_key))
+	}
+
+	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrResult<KeyedMut<Function>> {
+		let function_key = function_key.as_key();
+
+		self.ctx.functions.get_keyed_mut(function_key).ok_or(IrErr::InvalidFunctionKey(function_key))
+	}
+
+
+
+	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<Layout>> {
+		use TyData::*;
+
+		let ty_key = ty_key.as_key();
+
+		let ty = self.get_ty(ty_key)?;
+
+		if ty.layout.borrow().is_none() {
+			let layout = match &ty.data {
+				Void => Layout::custom_scalar(0, 1),
+
+				&Primitive(prim) => self.ctx.target.get_primitive_layout(prim),
+
+				Block | &Pointer { .. } | &Function { .. } => self.ctx.target.get_pointer_layout(),
+
+				&Array { length, element_ty } => {
+					let layout_ref = self.finalize_ty(element_ty)?;
+					let Layout { size: elem_size, align: elem_align, .. } = layout_ref.deref();
+					Layout::custom_scalar(length * *elem_size, *elem_align)
+				},
+
+				Structure { field_tys } => {
+					let field_tys = field_tys.clone().into_iter();
+					let mut size = 0;
+					let mut align = 0;
+
+					let mut field_offsets = vec![];
+
+					for field_ty_key in field_tys {
+						let layout_ref = self.finalize_ty(field_ty_key)?;
+						let Layout { size: field_size, align: field_align, .. } = layout_ref.deref();
+
+						if *field_align > align { align = *field_align }
+
+						let padding = (*field_align - (size % *field_align)) % *field_align;
+
+						size += padding;
+
+						field_offsets.push(size);
+
+						size += *field_size;
+					}
+
+					size = if align < 2 { size } else { ((size + align - 1) / align) * align };
+
+					Layout::structure(size, align, field_offsets)
+				}
+			};
+
+			self.ctx.tys.get(ty_key).unwrap().layout.borrow_mut().replace(layout);
+		}
+
+		let base = self.ctx.tys.get(ty_key).unwrap().layout.borrow();
+
+		Ok(Ref::map(base, |opt| opt.as_ref().unwrap()))
+	}
+
+	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> {
+		Ok(self.finalize_ty(ty_key)?.size)
+	}
+
+	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> {
+		Ok(self.finalize_ty(ty_key)?.align)
+	}
+
+	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<[u64]>> {
+		let ty_key = ty_key.as_key();
+
+		if self.get_ty(ty_key)?.is_structure() {
+			Ok(Ref::map(self.finalize_ty(ty_key)?, |l| l.field_offsets.as_slice()))
+		} else {
+			Err(TyErr::ExpectedStructure(ty_key.as_key()).into())
+		}
+	}
+}
 
 
 #[derive(Debug)]
 pub struct FunctionBuilder<'b> {
-	pub builder: &'b mut Builder<'b>,
+	builder: &'b mut Builder<'b>,
 
-	pub function_key: FunctionKey,
-	pub function: Function,
+	function_key: FunctionKey,
+	function: Function,
 
-	pub active_block: Option<BlockKey>,
-	pub insertion_cursor: InsertionCursor,
-	pub active_src: Option<SrcAttribution>,
+	active_block: Option<BlockKey>,
+	insertion_cursor: InsertionCursor,
+	active_src: Option<SrcAttribution>,
 }
 
 
 
 impl<'b> FunctionBuilder<'b> {
-	pub fn new<K: AsKey<TyKey>> (builder: &'b mut Builder<'b>) -> Self {
+	pub fn new (builder: &'b mut Builder<'b>) -> Self {
 		let function_key = builder.ctx.functions.reserve();
 
 		Self {
@@ -102,25 +354,63 @@ impl<'b> FunctionBuilder<'b> {
 	pub fn finalize (mut self) -> IrResult<KeyedMut<'b, Function>> {
 		self.clear_active_block();
 
-		self.generate_own_ty()?;
+		let ty = self.generate_own_ty()?.as_key();
 
-		let mut cfg = Cfg::default();
+		let builder = self.builder;
+		let mut function = self.function;
+		let function_key = self.function_key;
 
-		self.generate_cfg(&mut cfg)?;
-		self.type_check(&mut cfg)?;
+		builder.ctx.functions
+			.define(
+				self.function_key,
+				Function {
+					ty,
+					name: function.name.clone(),
+					.. Function::default()
+				}
+			)
+			.ok_or(IrErr::FunctionAlreadyDefined(function_key))?;
 
-		self.function.cfg = cfg;
+		let cfg = cfg_generator::generate(&function)?;
+		let cfg = ty_checker::check(builder, cfg, &function)?;
 
-		self.builder.ctx.functions
-			.define(self.function_key, self.function)
-			.ok_or(IrErr::CannotFinalize)
+		function.cfg = cfg;
+
+		let mut slot = builder.get_function_mut(function_key)?;
+
+		*slot = function;
+
+		Ok(slot)
+	}
+
+
+
+	pub fn get_own_function (&self) -> Keyed<Function> {
+		Keyed { key: self.function_key, value: &self.function }
+	}
+
+	pub fn get_own_function_mut (&mut self) -> KeyedMut<Function> {
+		KeyedMut { key: self.function_key, value: &mut self.function }
+	}
+
+
+	pub fn set_name (&mut self, name: String) {
+		self.function.name = Some(name);
+	}
+
+	pub fn get_name (&mut self) -> Option<&str> {
+		self.function.name.as_deref()
+	}
+
+	pub fn clear_name (&mut self) -> Option<String> {
+		self.function.name.take()
 	}
 
 
 
 	pub fn generate_own_ty (&mut self) -> IrResult<KeyedMut<Ty>> {
 		let result_ty = if let Some(result_ty) = self.function.result {
-			self.get_ty(result_ty)?;
+			self.builder.get_ty(result_ty)?;
 			Some(result_ty)
 		} else {
 			None
@@ -131,56 +421,16 @@ impl<'b> FunctionBuilder<'b> {
 		for &param_key in self.function.param_order.iter() {
 			let param = self.get_param(param_key)?;
 
-			self.get_ty(param.ty)?;
-
 			parameter_tys.push(param.ty);
 		}
 
-		let ty = self.builder.ctx.add_ty(TyData::Function { parameter_tys, result_ty }.into());
+		let ty = self.builder.function_ty(parameter_tys, result_ty)?;
 
 		self.function.ty = ty.as_key();
 
 		Ok(ty)
 	}
 
-
-
-	fn walk_block (&self, cfg: &mut Cfg, block_key: BlockKey) -> IrResult {
-		let block = self.get_block(block_key)?;
-
-		let mut iter = block.ir.iter().enumerate();
-
-		while let Some((i, node)) = iter.next() {
-			if node.is_terminator() {
-				node.for_each_edge(|to| {
-					cfg.add_edge(block_key, to)?;
-					self.walk_block(cfg, to)
-				})?;
-
-				if iter.next().is_some() {
-					return Err(IrErr::NodeAfterTerminator(block_key, i))
-				}
-			}
-		}
-
-		Ok(())
-	}
-
-
-	pub fn generate_cfg (&self, cfg: &mut Cfg) -> IrResult {
-		for &block_ref in self.function.block_order.iter() {
-			self.walk_block(cfg, block_ref)?;
-		}
-
-		Ok(())
-	}
-
-
-
-	pub fn type_check (&self, cfg: &mut Cfg) -> IrResult {
-		ty_checker::check(self, cfg)?;
-		Ok(())
-	}
 
 
 
@@ -193,6 +443,62 @@ impl<'b> FunctionBuilder<'b> {
 	pub fn set_no_return_ty (&mut self) {
 		self.function.result = None
 	}
+
+
+
+
+	pub fn void_ty (&self) -> Keyed<Ty> { self.builder.void_ty() }
+	pub fn block_ty (&self) -> Keyed<Ty> { self.builder.block_ty() }
+	pub fn bool_ty (&self) -> Keyed<Ty> { self.builder.bool_ty() }
+	pub fn sint8_ty (&self) -> Keyed<Ty> { self.builder.sint8_ty() }
+	pub fn sint16_ty (&self) -> Keyed<Ty> { self.builder.sint16_ty() }
+	pub fn sint32_ty (&self) -> Keyed<Ty> { self.builder.sint32_ty() }
+	pub fn sint64_ty (&self) -> Keyed<Ty> { self.builder.sint64_ty() }
+	pub fn sint128_ty (&self) -> Keyed<Ty> { self.builder.sint128_ty() }
+	pub fn uint8_ty (&self) -> Keyed<Ty> { self.builder.uint8_ty() }
+	pub fn uint16_ty (&self) -> Keyed<Ty> { self.builder.uint16_ty() }
+	pub fn uint32_ty (&self) -> Keyed<Ty> { self.builder.uint32_ty() }
+	pub fn uint64_ty (&self) -> Keyed<Ty> { self.builder.uint64_ty() }
+	pub fn uint128_ty (&self) -> Keyed<Ty> { self.builder.uint128_ty() }
+	pub fn real32_ty (&self) -> Keyed<Ty> { self.builder.real32_ty() }
+	pub fn real64_ty (&self) -> Keyed<Ty> { self.builder.real64_ty() }
+
+	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<KeyedMut<Ty>> { self.builder.pointer_ty(target_ty) }
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<KeyedMut<Ty>> { self.builder.array_ty(length, element_ty) }
+	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<KeyedMut<Ty>> { self.builder.structure_ty(field_tys) }
+	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<KeyedMut<Ty>> { self.builder.function_ty(parameter_tys, result_ty) }
+
+	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Keyed<Ty>> { self.builder.get_ty(ty_key) }
+	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<KeyedMut<Ty>> { self.builder.get_ty_mut(ty_key) }
+
+	pub fn get_global<K: AsKey<GlobalKey>> (&self, global_key: K) -> IrResult<Keyed<Global>> { self.builder.get_global(global_key) }
+	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<KeyedMut<Global>> { self.builder.get_global_mut(global_key) }
+
+	pub fn get_function<K: AsKey<FunctionKey>> (&self, function_key: K) -> IrResult<Keyed<Function>> {
+		let function_key = function_key.as_key();
+
+		if function_key == self.function_key {
+			return Ok(Keyed { key: function_key, value: &self.function })
+		}
+
+		self.builder.get_function(function_key)
+	}
+
+	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrResult<KeyedMut<Function>> {
+		let function_key = function_key.as_key();
+
+		if function_key == self.function_key {
+			return Ok(KeyedMut { key: function_key, value: &mut self.function })
+		}
+
+		self.builder.get_function_mut(function_key)
+	}
+
+	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<Layout>> { self.builder.finalize_ty(ty_key) }
+
+	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> { self.builder.size_of(ty_key) }
+	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> { self.builder.align_of(ty_key) }
+	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<[u64]>> { self.builder.field_offsets_of(ty_key) }
 
 
 
@@ -332,18 +638,6 @@ impl<'b> FunctionBuilder<'b> {
 		self.function.param_data.get_keyed_mut(param_key).ok_or(IrErr::InvalidParamKey(param_key))
 	}
 
-
-
-
-	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<&Ty> {
-		let ty_key = ty_key.as_key();
-		self.builder.ctx.tys.get(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
-	}
-
-	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<&mut Ty> {
-		let ty_key = ty_key.as_key();
-		self.builder.ctx.tys.get_mut(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
-	}
 
 
 
@@ -686,7 +980,7 @@ impl<'b> FunctionBuilder<'b> {
 
 	pub fn constant (&mut self, constant: Constant) -> IrResult<&mut Ir> { self.write_node(IrData::Constant(constant)) }
 
-	pub fn const_null (&mut self) -> IrResult<&mut Ir> { self.constant(Constant::Null) }
+	pub fn const_null<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<&mut Ir> { self.constant(Constant::Null(ty_key.as_key())) }
 	pub fn const_bool (&mut self, value: bool) -> IrResult<&mut Ir> { self.constant(Constant::Bool(value)) }
 	pub fn const_sint8 (&mut self, value: i8) -> IrResult<&mut Ir> { self.constant(Constant::SInt8(value)) }
 	pub fn const_sint16 (&mut self, value: i16) -> IrResult<&mut Ir> { self.constant(Constant::SInt16(value)) }
@@ -701,11 +995,7 @@ impl<'b> FunctionBuilder<'b> {
 	pub fn const_real32 (&mut self, value: f32) -> IrResult<&mut Ir> { self.constant(Constant::Real32(value)) }
 	pub fn const_real64 (&mut self, value: f64) -> IrResult<&mut Ir> { self.constant(Constant::Real64(value)) }
 
-	pub fn const_aggregate<K: AsKey<TyKey>> (&mut self, ty_key: K, indices: Vec<u64>, values: Vec<Constant>) -> IrResult<&mut Ir> {
-		let ty_key = ty_key.as_key();
 
-		self.constant(Constant::Aggregate(ty_key, indices, values))
-	}
 
 	pub fn build_aggregate<K: AsKey<TyKey>> (&mut self, ty_key: K, indices: Vec<u64>) -> IrResult<&mut Ir> {
 		let ty_key = ty_key.as_key();
@@ -766,12 +1056,8 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn gep (&mut self) -> IrResult<&mut Ir> {
-		self.write_node(IrData::Gep)
-	}
-
-	pub fn static_gep (&mut self, indices: Vec<u64>) -> IrResult<&mut Ir> {
-		self.write_node(IrData::StaticGep(indices))
+	pub fn gep (&mut self, num_indices: u64) -> IrResult<&mut Ir> {
+		self.write_node(IrData::Gep(num_indices))
 	}
 
 	pub fn load (&mut self) -> IrResult<&mut Ir> {

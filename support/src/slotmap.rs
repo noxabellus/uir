@@ -18,6 +18,14 @@ impl<K: Key> AsKey<K> for K {
 	fn as_key (&self) -> K { *self }
 }
 
+impl<K: Key> AsKey<K> for &K {
+	fn as_key (&self) -> K { **self }
+}
+
+impl<K: Key> AsKey<K> for &mut K {
+	fn as_key (&self) -> K { **self }
+}
+
 
 pub trait Keyable {
 	type Key: Key;
@@ -26,9 +34,20 @@ pub trait Keyable {
 
 #[derive(Debug)]
 pub struct Keyed<'a, D: Keyable> {
-	pub(crate) key: D::Key,
-	pub(crate) value: &'a D,
+	pub key: D::Key,
+	pub value: &'a D,
 }
+
+impl<'a, D: Keyable> Clone for Keyed<'a, D> {
+	fn clone (&self) -> Self {
+		Self {
+			key: self.key,
+			value: self.value,
+		}
+	}
+}
+
+impl<'a, D: Keyable> Copy for Keyed<'a, D> { }
 
 impl<'a, D: Keyable> Keyed<'a, D> {
 	pub fn into_ref (self) -> &'a D {
@@ -52,8 +71,8 @@ impl<'a, D: Keyable> ops::Deref for Keyed<'a, D> {
 
 #[derive(Debug)]
 pub struct KeyedMut<'a, D: Keyable> {
-	pub(crate) key: D::Key,
-	pub(crate) value: &'a mut D,
+	pub key: D::Key,
+	pub value: &'a mut D,
 }
 
 impl<'a, D: Keyable> KeyedMut<'a, D> {
@@ -142,7 +161,7 @@ macro_rules! slotmap_keyable {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Slotmap<K: Key, V: Keyable<Key = K>> {
 	slots: Vec<(u32, usize)>,
 	values: Vec<Option<V>>,

@@ -56,6 +56,14 @@ impl<T> Stack<T> {
 		self.items.pop()
 	}
 
+	pub fn pop_n (&mut self, n: usize) -> bool {
+		if self.len() > n { return false }
+
+		unsafe { self.items.set_len(self.len() - n) }
+
+		true
+	}
+
 	pub fn push (&mut self, item: T) {
 		self.items.push(item)
 	}
@@ -66,6 +74,18 @@ impl<T> Stack<T> {
 
 	pub fn as_mut_slice (&mut self) -> &mut [T] {
 		self.items.as_mut_slice()
+	}
+
+	pub fn duplicate (&mut self) -> bool
+	where T: Clone
+	{
+		if let Some(top) = self.peek() {
+			let top = top.clone();
+			self.push(top);
+			true
+		} else {
+			false
+		}
 	}
 
 	pub fn iter (&self) -> Iter<T> {

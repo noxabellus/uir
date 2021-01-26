@@ -1,9 +1,45 @@
-use std::ops;
+use std::{cell::RefCell, ops};
 
-use super::src::SrcAttribution;
+use super::{
+	src::SrcAttribution,
+	ir::{ UnaryOp, BinaryOp, CastOp, BlockKey },
+};
 
 
 support::slotmap_keyable! { Ty, TyMeta }
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TyErr {
+	StackUnderflow,
+	ExpectedConstant,
+	GepNoIndices,
+	PhiMissingInPredecessor,
+	UnusedValues(BlockKey, usize),
+	GepTargetNotPointer(TyKey),
+	GepInvalidSubElement(TyKey),
+	GepImplicitLoad(TyKey),
+	GepInvalidIndex(TyKey),
+	GepOutOfBounds(TyKey, u64, u64),
+	InvalidTyKey(TyKey),
+	BlockNotAllowed(TyKey),
+	ExpectedTy(TyKey, TyKey),
+	ExpectedStructure(TyKey),
+	ExpectedFunction(TyKey),
+	ExpectedPointer(TyKey),
+	ExpectedAggregateTy(TyKey),
+	ExpectedInteger(TyKey),
+	InvalidNull(TyKey),
+	AggregateIndicesMismatch(usize),
+	InvalidAggregateIndex(u64),
+	ExpectedAggregateElementTy(u64, TyKey, TyKey),
+	BinaryOpTypeMismatch(TyKey, TyKey),
+	BinaryOpInvalidOperandTy(BinaryOp, TyKey),
+	UnaryOpInvalidOperandTy(UnaryOp, TyKey),
+	InvalidCast(CastOp, TyKey, TyKey)
+}
+
+pub type TyResult<T = ()> = Result<T, TyErr>;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,45 +72,27 @@ impl TyData {
 	pub fn is_uint (&self) -> bool { matches!(self, Self::Primitive(PrimitiveTy::UInt8) | Self::Primitive(PrimitiveTy::UInt16) | Self::Primitive(PrimitiveTy::UInt32) | Self::Primitive(PrimitiveTy::UInt64) | Self::Primitive(PrimitiveTy::UInt128)) }
 	pub fn is_int (&self) -> bool { self.is_sint() || self.is_uint() }
 	pub fn is_real (&self) -> bool { matches!(self, Self::Primitive(PrimitiveTy::Real32) | Self::Primitive(PrimitiveTy::Real64)) }
-	pub fn has_sign (&self) -> bool { self.is_sint() || self.is_real() }
+	pub fn is_arithmetic (&self) -> bool { self.is_int() || self.is_real() || self.is_pointer() }
+	pub fn has_equality (&self) -> bool { self.is_arithmetic() || self.is_bool() || self.is_function() }
+	pub fn is_signed (&self) -> bool { self.is_sint() || self.is_real() }
 	pub fn is_pointer (&self) -> bool { matches!(self, Self::Pointer { .. }) }
 	pub fn is_array (&self) -> bool { matches!(self, Self::Array { .. }) }
 	pub fn is_structure (&self) -> bool { matches!(self, Self::Structure { .. }) }
 	pub fn is_function (&self) -> bool { matches!(self, Self::Function { .. }) }
+
 	pub fn is_aggregate (&self) -> bool {
-		match self {
-			| Self::Array { .. }
+		matches!(self,
+			  Self::Array { .. }
 			| Self::Structure { .. }
-			=> true,
-
-			| Self::Void { .. }
-			| Self::Block { .. }
-			| Self::Primitive { .. }
-			| Self::Pointer { .. }
-			| Self::Function { .. }
-			=> false
-		}
+		)
 	}
+
 	pub fn is_scalar (&self) -> bool {
-		match self {
-			| Self::Primitive { .. }
+		matches!(self,
+			  Self::Primitive { .. }
 			| Self::Pointer { .. }
 			| Self::Function { .. }
-			=> true,
-
-			| Self::Array { .. }
-			| Self::Structure { .. }
-			| Self::Void { .. }
-			| Self::Block { .. }
-			=> false
-		}
-	}
-	pub fn validate_index (&self, idx: u64) -> bool {
-		match self {
-			Self::Array { length, .. } => idx < *length,
-			Self::Structure { field_tys } => field_tys.get(idx as usize).is_some(),
-			_ => false
-		}
+		)
 	}
 }
 
@@ -103,7 +121,7 @@ pub struct Ty {
 	pub name: Option<String>,
 	pub meta: Vec<TyMetaKey>,
 	pub src: Option<SrcAttribution>,
-	pub layout: Option<Layout>,
+	pub layout: RefCell<Option<Layout>>,
 }
 
 impl From<TyData> for Ty {
@@ -125,6 +143,6 @@ impl Ty {
 		&& (other.name.is_none()   || other.name   == self.name  )
 		&& (other.meta.is_empty()  || other.meta   == self.meta  )
 		&& (other.src.is_none()    || other.src    == self.src   )
-		&& (other.layout.is_none() || other.layout == self.layout)
+		&& (other.layout.borrow().is_none() || other.layout == self.layout)
 	}
 }

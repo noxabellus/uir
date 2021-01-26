@@ -6,6 +6,7 @@ use super::{
 	src::{ SrcAttribution, Src, SrcKey, },
 	ty::{ Ty, TyKey, TyMeta, TyMetaKey, },
 	cfg::Cfg,
+	target::Target,
 };
 
 
@@ -43,6 +44,8 @@ pub enum UnaryOp {
 pub enum CastOp {
 	IntToReal,
 	RealToInt,
+	SIntToUInt,
+	UIntToSInt,
 	ZeroExtend,
 	SignExtend,
 	Truncate,
@@ -50,9 +53,9 @@ pub enum CastOp {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Constant {
-	Null,
+	Null(TyKey),
 	Bool(bool),
 	SInt8(i8),
 	SInt16(i16),
@@ -66,20 +69,39 @@ pub enum Constant {
 	UInt128(u128),
 	Real32(f32),
 	Real64(f64),
-	Aggregate(TyKey, Vec<u64>, Vec<Constant>),
 }
 
-#[derive(Debug)]
+impl Constant {
+	pub fn into_index (self) -> Option<u64> {
+		use Constant::*;
+
+		Some(match self {
+			SInt8(x) if x >= 0 => { x as u64 }
+			SInt16(x) if x >= 0 => { x as u64 }
+			SInt32(x) if x >= 0 => { x as u64 }
+			SInt64(x) if x >= 0 => { x as u64 }
+			SInt128(x) if x >= 0 && x <= u64::MAX as i128 => { x as u64 }
+			UInt8(x) => { x as u64 }
+			UInt16(x) => { x as u64 }
+			UInt32(x) => { x as u64 }
+			UInt64(x) => { x as u64 }
+			UInt128(x) if x < u64::MAX as u128 => { x as u64 }
+			_ => return None
+		})
+	}
+}
+
+#[derive(Debug, Clone)]
 pub enum ConstIrData {
 	Constant(Constant),
-	BinaryOp(BinaryOp, Box<Constant>),
+	BinaryOp(BinaryOp, Box<Constant>, Box<Constant>),
 	UnaryOp(UnaryOp, Box<Constant>),
 	CastOp(CastOp, TyKey, Box<Constant>),
 }
 
-impl Default for ConstIrData { fn default () -> Self { Self::Constant(Constant::Null) } }
+impl Default for ConstIrData { fn default () -> Self { Self::Constant(Constant::Null(TyKey::default())) } }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ConstIr {
 	pub name: Option<String>,
 	pub data: ConstIrData,
@@ -105,7 +127,7 @@ pub enum ConstIrMeta {
 	User(String)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum IrData {
 	Constant(Constant),
 
@@ -123,8 +145,7 @@ pub enum IrData {
 	UnaryOp(UnaryOp),
 	CastOp(CastOp, TyKey),
 
-	Gep,
-	StaticGep(Vec<u64>),
+	Gep(u64),
 	Load,
 	Store,
 
@@ -142,7 +163,7 @@ pub enum IrData {
 	Unreachable,
 }
 
-impl Default for IrData { fn default () -> Self { Self::Constant(Constant::Null) } }
+impl Default for IrData { fn default () -> Self { Self::Constant(Constant::Null(TyKey::default())) } }
 
 
 impl IrData {
@@ -192,7 +213,7 @@ impl IrData {
 }
 
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Ir {
 	pub name: Option<String>,
 	pub data: IrData,
@@ -220,7 +241,7 @@ pub enum IrMeta {
 }
 
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Param {
 	pub name: Option<String>,
 	pub ty: TyKey,
@@ -234,7 +255,7 @@ pub enum ParamMeta {
 }
 
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Local {
 	pub name: Option<String>,
 	pub ty: TyKey,
@@ -247,7 +268,7 @@ pub enum LocalMeta {
 	User(String)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Block {
 	pub name: Option<String>,
 	pub ir: Vec<Ir>,
@@ -257,7 +278,7 @@ pub struct Block {
 
 
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Function {
 	pub name: Option<String>,
 	pub ty: TyKey,
@@ -281,7 +302,7 @@ pub enum FunctionMeta {
 #[derive(Debug)]
 pub struct Global {
 	pub name: Option<String>,
-	pub ty: Ty,
+	pub ty: TyKey,
 	pub ir: Vec<Ir>,
 	pub src: Option<SrcAttribution>,
 	pub meta: Vec<GlobalMetaKey>,
@@ -306,6 +327,8 @@ pub struct Meta {
 
 #[derive(Debug)]
 pub struct Context {
+	pub target: Box<dyn Target>,
+
 	pub srcs: Slotmap<SrcKey, Src>,
 
 	pub tys: Slotmap<TyKey, Ty>,
