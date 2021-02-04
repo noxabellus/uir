@@ -39,18 +39,18 @@ mod test {
 			 .as_key()
 		};
 
-		f.set_active_block(entry)?;
+		f.set_active_block(entry);
 		{
-			f.param_key(a)?;
-			f.load()?;
+			f.param_key(a);
+			f.load();
 
-			f.param_key(b)?;
-			f.load()?;
+			f.param_key(b);
+			f.load();
 
-			f.binary_op(Add)?
+			f.binary_op(Add)
 			 .set_name("result");
 
-			f.ret()?;
+			f.ret();
 		}
 
 		let function = f.finalize()?;
