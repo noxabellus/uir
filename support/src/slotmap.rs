@@ -114,7 +114,7 @@ impl<'a, D: Keyable> ops::DerefMut for KeyedMut<'a, D> {
 #[macro_export]
 macro_rules! slotmap_impl_key {
 	($($ty:ty),+) => { $(
-		impl Into<$crate::slotmap::KeyData> for $ty { fn into (self) -> $crate::slotmap::KeyData { self.0 } }
+		impl From<$ty> for $crate::slotmap::KeyData { fn from (t: $ty) -> $crate::slotmap::KeyData { t.0 } }
 		impl From<$crate::slotmap::KeyData> for $ty { fn from (key: $crate::slotmap::KeyData) -> Self { Self(key) } }
 	)+ };
 }
@@ -335,7 +335,7 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 		self.keys.swap_remove(value_idx);
 		self.slots[self.keys[value_idx].into().1 as usize].1 = value_idx;
 
-		Some(self.values.swap_remove(value_idx)?)
+		self.values.swap_remove(value_idx)
 	}
 
 	pub fn iter (&self) -> PairIter<'_, K, V> {
