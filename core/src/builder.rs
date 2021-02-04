@@ -281,8 +281,8 @@ impl<'a> GlobalManipulator<'a> {
 		self
 	}
 
-	pub fn set_ir (mut self, ir: ConstIr) -> Self {
-		self.ir = Some(ir);
+	pub fn set_init (mut self, constant: Constant) -> Self {
+		self.init = Some(constant);
 		self
 	}
 
@@ -1369,10 +1369,10 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn build_aggregate<K: AsKey<TyKey>> (&mut self, ty_key: K, indices: Vec<u64>) -> IrResult<IrManipulator> {
+	pub fn build_aggregate<K: AsKey<TyKey>> (&mut self, ty_key: K, data: AggregateData) -> IrResult<IrManipulator> {
 		let ty_key = ty_key.as_key();
 
-		self.write_node(IrData::BuildAggregate(ty_key, indices))
+		self.write_node(IrData::BuildAggregate(ty_key, data))
 	}
 
 	pub fn global_key<K: AsKey<GlobalKey>> (&mut self, key: K) -> IrResult<IrManipulator> {
@@ -1454,7 +1454,7 @@ impl<'b> FunctionBuilder<'b> {
 		self.write_node(IrData::CondBranch(then_block, else_block))
 	}
 
-	pub fn switch (&mut self, case_blocks: Vec<(ConstIr, BlockKey)>) -> IrResult<IrManipulator> {
+	pub fn switch (&mut self, case_blocks: Vec<(Constant, BlockKey)>) -> IrResult<IrManipulator> {
 		self.write_node(IrData::Switch(case_blocks))
 	}
 

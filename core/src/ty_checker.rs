@@ -86,13 +86,14 @@ impl OpStack {
 		)
 	}
 
-	fn peek_constant_at (&mut self, at: usize) -> TyCkResult<(TyKey, Constant)> {
+	fn peek_constant_at (&mut self, at: usize) -> TyCkResult<(TyKey, &Constant)> {
 		Ok(
 			self.entries
 				.peek_at(at)
 				.ok_or(TyErr::StackUnderflow)
 				.and_then(|(ty, c)|
 					c
+						.as_ref()
 						.ok_or(TyErr::ExpectedConstant)
 						.map(|c| (*ty, c))
 				)?
@@ -106,7 +107,7 @@ impl OpStack {
 	fn nth_is_constant (&mut self, at: usize) -> bool {
 		self.entries
 			.peek_at(at)
-			.and_then(|(_, c)| *c)
+			.and_then(|(_, c)| c.as_ref())
 			.is_some()
 	}
 
@@ -327,14 +328,14 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			SignExtend
 			=> self.builder.size_of(new_ty)? >= self.builder.size_of(curr_ty)?
 			&& (
-						(curr_ty.is_int() && new_ty.is_int())
+					 (curr_ty.is_int() && new_ty.is_int())
 				|| (curr_ty.is_real() && new_ty.is_real())
 			),
 
 			Truncate
 			=> self.builder.size_of(curr_ty)? >= self.builder.size_of(new_ty)?
 			&& (
-						(curr_ty.is_int()  && new_ty.is_int())
+					 (curr_ty.is_int()  && new_ty.is_int())
 				|| (curr_ty.is_real() && new_ty.is_real())
 			),
 
@@ -398,43 +399,93 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 			Real64(_)
 			=> { self.builder.real64_ty() }
+
+			Aggregate(ty_key, agg_data)
+			=> {
+				let ty = self.builder.get_finalized_ty(ty_key)?;
+
+				assert(ty.is_aggregate(), TyErr::ExpectedAggregateTy(ty.as_key()))?;
+
+				match agg_data {
+					| ConstantAggregateData::Zeroed
+					| ConstantAggregateData::Uninitialized
+					=> { }
+
+					ConstantAggregateData::CopyFill(operand)
+					=> {
+						let operand_ty = self.get_constant_ty(operand)?;
+
+						if let TyData::Array { element_ty, .. } = ty.data {
+							assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(0, element_ty, operand_ty.as_key()))?;
+						} else {
+							return Err(TyErr::ExpectedArray(ty.as_key()).into())
+						}
+					}
+
+					ConstantAggregateData::Complete(elements)
+					=> {
+						match &ty.data {
+							&TyData::Array { length, element_ty } => {
+								for i in 0..length {
+									let operand = elements.get(i as usize).ok_or(TyErr::MissingAggregateElement(*ty_key, i))?;
+									let operand_ty = self.get_constant_ty(operand)?;
+
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty.as_key()))?;
+								}
+							},
+
+							TyData::Structure { field_tys } => {
+								for (i, &field_ty) in field_tys.iter().enumerate() {
+									let operand = elements.get(i).ok_or(TyErr::MissingAggregateElement(*ty_key, i as u64))?;
+									let operand_ty = self.get_constant_ty(operand)?;
+
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty.as_key()))?;
+								}
+							}
+
+							_ => unreachable!()
+						}
+					}
+
+					ConstantAggregateData::Indexed(indices, elements)
+					=> {
+						for (x, &i) in indices.iter().enumerate() {
+							for (y, &j) in indices.iter().enumerate() {
+								if x == y { continue }
+								assert(i != j, TyErr::DuplicateAggregateIndex(x, y, i))?;
+							}
+						}
+
+						match &ty.data {
+							&TyData::Array { length, element_ty } => {
+								for &i in indices.iter() {
+									assert(i < length, TyErr::InvalidAggregateIndex(i))?;
+
+									let operand = elements.get(i as usize).ok_or(TyErr::MissingAggregateElement(*ty_key, i))?;
+									let operand_ty = self.get_constant_ty(operand)?;
+
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty.as_key()))?;
+								}
+							},
+
+							TyData::Structure { field_tys } => {
+								for &i in indices.iter() {
+									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(i))?;
+									let operand = elements.get(i as usize).ok_or(TyErr::MissingAggregateElement(*ty_key, i))?;
+									let operand_ty = self.get_constant_ty(operand)?;
+
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty.as_key()))?;
+								}
+							}
+
+							_ => unreachable!()
+						}
+					}
+				}
+
+				ty
+			}
 		})
-	}
-
-	pub fn check_const_node (&mut self, const_node: &ConstIr) -> TyCkResult<Keyed<Ty>> {
-		use ConstIrData::*;
-
-		match &const_node.data {
-			Constant(constant)
-			=> { self.get_constant_ty(constant) }
-
-			BinaryOp(op, left, right)
-			=> {
-				let left_ty = self.get_constant_ty(left)?;
-				let right_ty = self.get_constant_ty(right)?;
-
-				assert(self.ty_eq(left_ty, right_ty), TyErr::BinaryOpTypeMismatch(left_ty.as_key(), right_ty.as_key()))?;
-
-				self.check_bin_op(*op, left_ty)
-			}
-
-			UnaryOp(op, operand)
-			=> {
-				let operand_ty = self.get_constant_ty(operand)?;
-
-				self.check_un_op(*op, operand_ty)
-			}
-
-			CastOp(op, new_ty, castee)
-			=> {
-				let castee_ty = self.get_constant_ty(castee)?;
-				let new_ty = self.builder.get_finalized_ty(new_ty)?;
-
-				self.check_cast_op(*op, castee_ty, new_ty)?;
-
-				Ok(new_ty)
-			}
-		}
 	}
 
 	pub fn check_node (&mut self, parent: Keyed<Block>, node: &Ir) -> TyCkResult {
@@ -443,34 +494,85 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		match &node.data {
 			Constant(constant)
 			=> {
-				self.stack.push_constant(self.get_constant_ty(constant)?.as_key(), *constant)
+				self.stack.push_constant(self.get_constant_ty(constant)?.as_key(), constant.clone())
 			}
 
-			BuildAggregate(ty_key, indices)
+			BuildAggregate(ty_key, agg_data)
 			=> {
 				let ty = self.builder.get_finalized_ty(ty_key)?;
 
 				assert(ty.is_aggregate(), TyErr::ExpectedAggregateTy(ty.as_key()))?;
 
-				if indices.is_empty() {
-					match &ty.data {
-						&TyData::Array { length, element_ty } => {
-							for i in 0..length {
-								let operand_ty = self.stack.pop()?;
+				match agg_data {
+					| AggregateData::Zeroed
+					| AggregateData::Uninitialized
+					=> { }
 
-								assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty))?;
+					AggregateData::CopyFill
+					=> {
+						let operand_ty = self.stack.pop()?;
+
+						if let TyData::Array { element_ty, .. } = ty.data {
+							assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(0, element_ty, operand_ty.as_key()))?;
+						} else {
+							return Err(TyErr::ExpectedArray(ty.as_key()).into())
+						}
+					}
+
+					AggregateData::Complete
+					=> {
+						match &ty.data {
+							&TyData::Array { length, element_ty } => {
+								for i in 0..length {
+									let operand_ty = self.stack.pop()?;
+
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty))?;
+								}
+							},
+
+							TyData::Structure { field_tys } => {
+								for (i, &field_ty) in field_tys.iter().enumerate() {
+									let operand_ty = self.stack.pop()?;
+
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty))?;
+								}
 							}
-						},
 
-						TyData::Structure { field_tys } => {
-							for (i, &field_ty) in field_tys.iter().enumerate() {
-								let operand_ty = self.stack.pop()?;
+							_ => unreachable!()
+						}
+					}
 
-								assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty))?;
+					AggregateData::Indexed(indices)
+					=> {
+						for (x, &i) in indices.iter().enumerate() {
+							for (y, &j) in indices.iter().enumerate() {
+								if x == y { continue }
+								assert(i != j, TyErr::DuplicateAggregateIndex(x, y, i))?;
 							}
 						}
 
-						_ => unreachable!()
+						match &ty.data {
+							&TyData::Array { length, element_ty } => {
+								for &i in indices.iter() {
+									assert(i < length, TyErr::InvalidAggregateIndex(i))?;
+
+									let operand_ty = self.stack.pop()?;
+
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty))?;
+								}
+							},
+
+							TyData::Structure { field_tys } => {
+								for &i in indices.iter() {
+									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(i))?;
+									let operand_ty = self.stack.pop()?;
+
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty))?;
+								}
+							}
+
+							_ => unreachable!()
+						}
 					}
 				}
 
@@ -573,7 +675,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 							if self.stack.nth_is_constant(i) {
 								let (ty, constant) = self.stack.peek_constant_at(i).unwrap();
 
-								let index = constant.into_index().ok_or(TyErr::ExpectedInteger(ty))?;
+								let index = constant.as_index().ok_or(TyErr::ExpectedInteger(ty))?;
 
 								assert(index <= *length, TyErr::GepOutOfBounds(target.as_key(), *length, index))?
 							} else {
@@ -588,7 +690,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 						TyData::Structure { field_tys } => {
 							let (ty, constant) = self.stack.peek_constant_at(i)?;
 
-							let index = constant.into_index().ok_or(TyErr::ExpectedInteger(ty))?;
+							let index = constant.as_index().ok_or(TyErr::ExpectedInteger(ty))?;
 
 							let field_ty = field_tys.get(index as usize).ok_or_else(|| TyErr::GepOutOfBounds(target.as_key(), field_tys.len() as u64, index))?;
 
