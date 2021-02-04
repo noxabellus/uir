@@ -6,6 +6,7 @@ pub mod ir;
 pub mod ty_checker;
 pub mod cfg_generator;
 pub mod builder;
+pub mod builder_macros;
 
 
 #[cfg(test)]
@@ -16,7 +17,8 @@ mod test {
 	use super::{
 		ir::*,
 		builder::*,
-		target
+		target,
+		with_block,
 	};
 	use BinaryOp::*;
 
@@ -33,14 +35,7 @@ mod test {
 
 		f.set_return_ty(s32t);
 
-		let entry = {
-			f.append_new_block()
-			 .set_name("entry")
-			 .as_key()
-		};
-
-		f.set_active_block(entry);
-		{
+		with_block!(f, "entry" => {
 			f.param_key(a);
 			f.load();
 
@@ -51,7 +46,7 @@ mod test {
 			 .set_name("result");
 
 			f.ret();
-		}
+		});
 
 		let function = f.finalize()?;
 
