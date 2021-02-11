@@ -17,3 +17,11 @@ pub fn assert<E> (cond: bool, err: E) -> Result<(), E> {
 		Err(err)
 	}
 }
+
+
+
+pub fn index_of<E: PartialEq, I: Iterator<Item = E>> (i: I, el: E) -> Option<usize> {
+	i.enumerate()
+	 .find(|(_, e)| el == *e)
+	 .map(|(i, _)| i)
+}
