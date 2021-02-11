@@ -28,6 +28,8 @@ mod test {
 		let mut builder = Builder::new(&mut context);
 		let mut f = FunctionBuilder::new(&mut builder);
 
+		f.set_name("add");
+
 		let s32t = f.sint32_ty().as_key();
 
 		let a = f.append_param(s32t).set_name("a").as_key();

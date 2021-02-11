@@ -766,8 +766,8 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn set_name (&mut self, name: String) {
-		self.function.name = Some(name);
+	pub fn set_name (&mut self, name: impl Into<String>) {
+		self.function.name = Some(name.into());
 	}
 
 	pub fn get_name (&mut self) -> Option<&str> {
