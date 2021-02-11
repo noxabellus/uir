@@ -7,6 +7,7 @@ pub mod ty_checker;
 pub mod cfg_generator;
 pub mod builder;
 pub mod builder_macros;
+pub mod printer;
 
 
 #[cfg(test)]
@@ -19,6 +20,7 @@ mod test {
 		builder::*,
 		target,
 		with_block,
+		printer::PrinterState,
 	};
 	use BinaryOp::*;
 
@@ -38,10 +40,10 @@ mod test {
 		f.set_return_ty(s32t);
 
 		with_block!(f, "entry" => {
-			f.param_key(a);
+			f.param_ref(a);
 			f.load();
 
-			f.param_key(b);
+			f.param_ref(b);
 			f.load();
 
 			f.binary_op(Add)
@@ -50,12 +52,15 @@ mod test {
 			f.ret();
 		});
 
-		let function = f.finalize()?;
+		let function = f.finalize()?.as_key();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
-		path.push("add.dbg");
-		write(&path, format!("{:#?}", function)).unwrap();
+		path.push("add.ir");
+		let ps = PrinterState::with_function(&context, context.functions.get(function).unwrap());
+		let output = format!("{}", ps.print_own_function());
+		write(&path, &output).unwrap();
+		println!("{}", &output);
 
 		Ok(())
 	}

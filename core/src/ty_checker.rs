@@ -447,10 +447,10 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 						}
 					}
 
-					ConstantAggregateData::Indexed(indices, elements)
+					ConstantAggregateData::Indexed(indexed_elements)
 					=> {
-						for (x, &i) in indices.iter().enumerate() {
-							for (y, &j) in indices.iter().enumerate() {
+						for (x, &(i, _)) in indexed_elements.iter().enumerate() {
+							for (y, &(j, _)) in indexed_elements.iter().enumerate() {
 								if x == y { continue }
 								assert(i != j, TyErr::DuplicateAggregateIndex(x, y, i))?;
 							}
@@ -458,10 +458,9 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 						match &ty.data {
 							&TyData::Array { length, element_ty } => {
-								for &i in indices.iter() {
+								for &(i, ref operand) in indexed_elements.iter() {
 									assert(i < length, TyErr::InvalidAggregateIndex(i))?;
 
-									let operand = elements.get(i as usize).ok_or(TyErr::MissingAggregateElement(*ty_key, i))?;
 									let operand_ty = self.get_constant_ty(operand)?;
 
 									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty.as_key()))?;
@@ -469,9 +468,8 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 							},
 
 							TyData::Structure { field_tys } => {
-								for &i in indices.iter() {
+								for &(i, ref operand) in indexed_elements.iter() {
 									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(i))?;
-									let operand = elements.get(i as usize).ok_or(TyErr::MissingAggregateElement(*ty_key, i))?;
 									let operand_ty = self.get_constant_ty(operand)?;
 
 									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty.as_key()))?;
@@ -579,7 +577,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				self.stack.push(ty)
 			}
 
-			GlobalKey(global_key)
+			GlobalRef(global_key)
 			=> {
 				let global = self.builder.get_global(global_key)?;
 				let ty_key = self.builder.get_finalized_ty(global.ty)?.as_key();
@@ -587,21 +585,21 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				self.stack.push(self.builder.pointer_ty(ty_key)?)
 			}
 
-			FunctionKey(function_key)
+			FunctionRef(function_key)
 			=> {
 				let function = self.builder.get_function(function_key)?;
 
 				self.stack.push(self.builder.get_finalized_ty(function.ty)?)
 			}
 
-			BlockKey(block_key)
+			BlockRef(block_key)
 			=> {
 				self.get_block(block_key)?;
 
 				self.stack.push(self.builder.block_ty())
 			}
 
-			ParamKey(param_key)
+			ParamRef(param_key)
 			=> {
 				let param = self.get_param(param_key)?;
 				let ty_key = self.builder.get_finalized_ty(param.ty)?.as_key();
@@ -609,7 +607,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				self.stack.push(self.builder.pointer_ty(ty_key)?)
 			}
 
-			LocalKey(local_key)
+			LocalRef(local_key)
 			=> {
 				let local = self.get_local(local_key)?;
 				let ty_key = self.builder.get_finalized_ty(local.ty)?.as_key();

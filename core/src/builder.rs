@@ -1349,34 +1349,34 @@ impl<'b> FunctionBuilder<'b> {
 		self.write_node(IrData::BuildAggregate(ty_key, data))
 	}
 
-	pub fn global_key<K: AsKey<GlobalKey>> (&mut self, key: K) -> IrManipulator {
+	pub fn global_ref<K: AsKey<GlobalKey>> (&mut self, key: K) -> IrManipulator {
 		let key = key.as_key();
 
-		self.write_node(IrData::GlobalKey(key))
+		self.write_node(IrData::GlobalRef(key))
 	}
 
-	pub fn function_key<K: AsKey<FunctionKey>> (&mut self, key: K) -> IrManipulator {
+	pub fn function_ref<K: AsKey<FunctionKey>> (&mut self, key: K) -> IrManipulator {
 		let key = key.as_key();
 
-		self.write_node(IrData::FunctionKey(key))
+		self.write_node(IrData::FunctionRef(key))
 	}
 
-	pub fn block_key<K: AsKey<BlockKey>> (&mut self, key: K) -> IrManipulator {
+	pub fn block_ref<K: AsKey<BlockKey>> (&mut self, key: K) -> IrManipulator {
 		let key = key.as_key();
 
-		self.write_node(IrData::BlockKey(key))
+		self.write_node(IrData::BlockRef(key))
 	}
 
-	pub fn param_key<K: AsKey<ParamKey>> (&mut self, key: K) -> IrManipulator {
+	pub fn param_ref<K: AsKey<ParamKey>> (&mut self, key: K) -> IrManipulator {
 		let key = key.as_key();
 
-		self.write_node(IrData::ParamKey(key))
+		self.write_node(IrData::ParamRef(key))
 	}
 
-	pub fn local_key<K: AsKey<LocalKey>> (&mut self, key: K) -> IrManipulator {
+	pub fn local_ref<K: AsKey<LocalKey>> (&mut self, key: K) -> IrManipulator {
 		let key = key.as_key();
 
-		self.write_node(IrData::LocalKey(key))
+		self.write_node(IrData::LocalRef(key))
 	}
 
 

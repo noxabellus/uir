@@ -69,7 +69,7 @@ pub enum ConstantAggregateData {
 	Uninitialized,
 	Zeroed,
 	CopyFill(Box<Constant>),
-	Indexed(Vec<u64>, Vec<Constant>),
+	Indexed(Vec<(u64, Constant)>),
 	Complete(Vec<Constant>),
 }
 
@@ -127,11 +127,11 @@ pub enum IrData {
 
 	BuildAggregate(TyKey, AggregateData),
 
-	GlobalKey(GlobalKey),
-	FunctionKey(FunctionKey),
-	BlockKey(BlockKey),
-	ParamKey(ParamKey),
-	LocalKey(LocalKey),
+	GlobalRef(GlobalKey),
+	FunctionRef(FunctionKey),
+	BlockRef(BlockKey),
+	ParamRef(ParamKey),
+	LocalRef(LocalKey),
 
 	Phi(TyKey),
 
@@ -318,7 +318,7 @@ pub enum GlobalMeta {
 pub struct Meta {
 	pub ty: Slotmap<TyMetaKey, TyMeta>,
 	pub function: Slotmap<FunctionMetaKey, FunctionMeta>,
-	pub arg: Slotmap<ParamMetaKey, ParamMeta>,
+	pub param: Slotmap<ParamMetaKey, ParamMeta>,
 	pub local: Slotmap<LocalMetaKey, LocalMeta>,
 	pub global: Slotmap<GlobalMetaKey, GlobalMeta>,
 	pub ir: Slotmap<IrMetaKey, IrMeta>,
