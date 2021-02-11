@@ -1,14 +1,16 @@
 use std::{
 	ops,
-	slice::Iter as SliceIter,
-	slice::IterMut as SliceIterMut
+	slice,
+	vec,
+	collections::HashMap,
+	hash::Hash,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Copy)]
 pub struct KeyData(u32, u32);
-pub trait Key: Copy + Into<KeyData> + From<KeyData> { }
-impl<T> Key for T where T: Copy + Into<KeyData> + From<KeyData> { }
+pub trait Key: Copy + Eq + Hash + Into<KeyData> + From<KeyData> { }
+impl<T> Key for T where T: Copy + Eq + Hash + Into<KeyData> + From<KeyData> { }
 
 pub trait AsKey<K: Key> {
 	fn as_key (&self) -> K;
@@ -161,6 +163,7 @@ macro_rules! slotmap_keyable {
 }
 
 
+
 #[derive(Debug, Clone)]
 pub struct Slotmap<K: Key, V: Keyable<Key = K>> {
 	slots: Vec<(u32, usize)>,
@@ -194,6 +197,16 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 		}
 	}
 
+
+	pub fn len (&self) -> usize {
+		self.values.len()
+	}
+
+	pub fn is_empty (&self) -> bool {
+		self.values.is_empty()
+	}
+
+
 	fn get_free_slot (&mut self) -> usize {
 		if let Some((head, tail)) = &mut self.free_list {
 			let slot_idx = *head;
@@ -214,35 +227,34 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 		}
 	}
 
-	pub fn get (&self, key: K) -> Option<&V> {
+	pub fn get_index (&self, key: K) -> Option<usize> {
 		let key = key.into();
 		let slot = self.slots[key.1 as usize];
 
 		if slot.0 == key.0 {
-			unsafe { self.values.get_unchecked(slot.1) }.as_ref()
+			Some(slot.1)
 		} else {
 			None
 		}
+	}
+
+	pub fn get (&self, key: K) -> Option<&V> {
+		self.get_index(key).and_then(move |idx| {
+			unsafe { self.values.get_unchecked(idx) }.as_ref()
+		})
 	}
 
 	pub fn get_mut (&mut self, key: K) -> Option<&mut V> {
-		let key = key.into();
-		let slot = self.slots[key.1 as usize];
-
-		if slot.0 == key.0 {
-			unsafe { self.values.get_unchecked_mut(slot.1) }.as_mut()
-		} else {
-			None
-		}
+		self.get_index(key).and_then(move |idx| {
+			unsafe { self.values.get_unchecked_mut(idx) }.as_mut()
+		})
 	}
 
-	pub fn get_keyed (&self, key: K) -> Option<Keyed<'_, V>>
-	{
+	pub fn get_keyed (&self, key: K) -> Option<Keyed<'_, V>> {
 		self.get(key).map(|value| Keyed { key, value })
 	}
 
-	pub fn get_keyed_mut (&mut self, key: K) -> Option<KeyedMut<'_, V>>
-	{
+	pub fn get_keyed_mut (&mut self, key: K) -> Option<KeyedMut<'_, V>> {
 		self.get_mut(key).map(|value| KeyedMut { key, value })
 	}
 
@@ -346,6 +358,10 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 		PairIterMut(self.keys.iter(), self.values.iter_mut())
 	}
 
+	pub fn keys (&self) -> slice::Iter<'_, K> {
+		self.keys.iter()
+	}
+
 	pub fn values (&self) -> ValueIter<'_, V> {
 		ValueIter(self.values.iter())
 	}
@@ -353,10 +369,80 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 	pub fn values_mut (&mut self) -> ValueIterMut<'_, V> {
 		ValueIterMut(self.values.iter_mut())
 	}
+
+	pub fn collapse (self) -> CollapsedSlotmap<K, V> {
+		let mut map = HashMap::default();
+		let mut vec = Vec::default();
+
+		for (k, v) in self.into_iter() {
+			let i = vec.len();
+			map.insert(k, i);
+			vec.push(v);
+		}
+
+		CollapsedSlotmap {
+			map,
+			values: vec.into_boxed_slice()
+		}
+	}
+
+	pub fn collapse_cloned (&self) -> CollapsedSlotmap<K, V>
+	where V: Clone
+	{
+		let mut map = HashMap::default();
+		let mut vec = Vec::default();
+
+		for (&k, v) in self.iter() {
+			let i = vec.len();
+			map.insert(k, i);
+			vec.push(v.clone());
+		}
+
+		CollapsedSlotmap {
+			map,
+			values: vec.into_boxed_slice()
+		}
+	}
 }
 
 
-pub struct ValueIter<'a, V> (SliceIter<'a, Option<V>>);
+
+
+#[derive(Debug, Clone)]
+pub struct CollapsedSlotmap<K: Key, V: Keyable<Key = K>> {
+	map: HashMap<K, usize>,
+	values: Box<[V]>
+}
+
+impl<K: Key, V: Keyable<Key = K>> ops::Deref for CollapsedSlotmap<K, V> {
+	type Target = [V];
+	fn deref (&self) -> &[V] { self.values.as_ref() }
+}
+
+impl<K: Key, V: Keyable<Key = K>> ops::DerefMut for CollapsedSlotmap<K, V> {
+	fn deref_mut (&mut self) -> &mut [V] { self.values.as_mut() }
+}
+
+impl<K: Key, V: Keyable<Key = K>> CollapsedSlotmap<K, V> {
+	pub fn get_index (&self, k: K) -> Option<usize> {
+		self.map.get(&k).copied()
+	}
+
+	pub fn get_by_key (&self, k: K) -> Option<&V> {
+		self.get_index(k).and_then(move |idx| self.values.get(idx))
+	}
+
+	pub fn get_by_key_mut (&mut self, k: K) -> Option<&mut V> {
+		self.get_index(k).and_then(move |idx| self.values.get_mut(idx))
+	}
+
+	pub fn into_inner (self) -> Box<[V]> {
+		self.values
+	}
+}
+
+
+pub struct ValueIter<'a, V> (slice::Iter<'a, Option<V>>);
 
 impl<'a, V> Iterator for ValueIter<'a, V> {
 	type Item = &'a V;
@@ -370,7 +456,7 @@ impl<'a, V> Iterator for ValueIter<'a, V> {
 }
 
 
-pub struct ValueIterMut<'a, V: Keyable> (SliceIterMut<'a, Option<V>>);
+pub struct ValueIterMut<'a, V: Keyable> (slice::IterMut<'a, Option<V>>);
 
 impl<'a, V: Keyable> Iterator for ValueIterMut<'a, V> {
 	type Item = &'a mut V;
@@ -382,7 +468,7 @@ impl<'a, V: Keyable> Iterator for ValueIterMut<'a, V> {
 	}
 }
 
-pub struct PairIter<'a, K: Key, V: Keyable<Key = K>> (SliceIter<'a, K>, SliceIter<'a, Option<V>>);
+pub struct PairIter<'a, K: Key, V: Keyable<Key = K>> (slice::Iter<'a, K>, slice::Iter<'a, Option<V>>);
 
 impl<'a, K: Key, V: Keyable<Key = K>> Iterator for PairIter<'a, K, V> {
 	type Item = (&'a K, &'a V);
@@ -396,7 +482,7 @@ impl<'a, K: Key, V: Keyable<Key = K>> Iterator for PairIter<'a, K, V> {
 	}
 }
 
-pub struct PairIterMut<'a, K: Key, V: Keyable<Key = K>> (SliceIter<'a, K>, SliceIterMut<'a, Option<V>>);
+pub struct PairIterMut<'a, K: Key, V: Keyable<Key = K>> (slice::Iter<'a, K>, slice::IterMut<'a, Option<V>>);
 
 impl<'a, K: Key, V: Keyable<Key = K>> Iterator for PairIterMut<'a, K, V> {
 	type Item = (&'a K, &'a mut V);
@@ -407,5 +493,29 @@ impl<'a, K: Key, V: Keyable<Key = K>> Iterator for PairIterMut<'a, K, V> {
 			Some(None) => self.next(),
 			None => None
 		}
+	}
+}
+
+
+pub struct IntoIter<K: Key, V: Keyable<Key = K>> (vec::IntoIter<K>, vec::IntoIter<Option<V>>);
+
+impl<K: Key, V: Keyable<Key = K>> Iterator for IntoIter<K, V> {
+	type Item = (K, V);
+	fn next (&mut self) -> Option<Self::Item> {
+		let key = self.0.next()?;
+		match self.1.next() {
+			Some(Some(val)) => Some((key, val)),
+			Some(None) => self.next(),
+			None => None
+		}
+	}
+}
+
+impl<K: Key, V: Keyable<Key = K>> IntoIterator for Slotmap<K, V> {
+	type Item = (K, V);
+	type IntoIter = IntoIter<K, V>;
+
+	fn into_iter (self) -> Self::IntoIter {
+		IntoIter(self.keys.into_iter(), self.values.into_iter())
 	}
 }
