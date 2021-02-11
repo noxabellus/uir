@@ -62,6 +62,8 @@ impl Cfg {
 			from
 		).ok_or(CfgErr::ExistingInEdge(from, to))?;
 
+		self.in_values.entry(to).or_default();
+
 		Ok(())
 	}
 
@@ -95,6 +97,7 @@ impl Cfg {
 
 		if ins.is_empty() {
 			self.in_edges.remove(&to);
+			self.in_values.remove(&to);
 		}
 
 		Ok(())

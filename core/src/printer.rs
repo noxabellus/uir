@@ -12,19 +12,19 @@ use super::{
 impl fmt::Display for PrimitiveTy {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			PrimitiveTy::Bool => write!(f, "Bool"),
-			PrimitiveTy::SInt8 => write!(f, "SInt8"),
-			PrimitiveTy::SInt16 => write!(f, "SInt16"),
-			PrimitiveTy::SInt32 => write!(f, "SInt32"),
-			PrimitiveTy::SInt64 => write!(f, "SInt64"),
-			PrimitiveTy::SInt128 => write!(f, "SInt128"),
-			PrimitiveTy::UInt8 => write!(f, "UInt8"),
-			PrimitiveTy::UInt16 => write!(f, "UInt16"),
-			PrimitiveTy::UInt32 => write!(f, "UInt32"),
-			PrimitiveTy::UInt64 => write!(f, "UInt64"),
-			PrimitiveTy::UInt128 => write!(f, "UInt128"),
-			PrimitiveTy::Real32 => write!(f, "Real32"),
-			PrimitiveTy::Real64 => write!(f, "Real64"),
+			PrimitiveTy::Bool => write!(f, "bool"),
+			PrimitiveTy::SInt8 => write!(f, "sint8"),
+			PrimitiveTy::SInt16 => write!(f, "sint16"),
+			PrimitiveTy::SInt32 => write!(f, "sint32"),
+			PrimitiveTy::SInt64 => write!(f, "sint64"),
+			PrimitiveTy::SInt128 => write!(f, "sint128"),
+			PrimitiveTy::UInt8 => write!(f, "uint8"),
+			PrimitiveTy::UInt16 => write!(f, "uint16"),
+			PrimitiveTy::UInt32 => write!(f, "uint32"),
+			PrimitiveTy::UInt64 => write!(f, "uint64"),
+			PrimitiveTy::UInt128 => write!(f, "uint128"),
+			PrimitiveTy::Real32 => write!(f, "real32"),
+			PrimitiveTy::Real64 => write!(f, "real64"),
 		}
 	}
 }
@@ -482,19 +482,19 @@ impl<'data, 'ctx> fmt::Display for ConstantPrinter<'data, 'ctx> {
 				write!(f, "({} null)", self.child(ty_key))
 			}
 
-			Constant::Bool(bool) => { write!(f, "(Bool {})", bool) }
-			Constant::SInt8(i8) => { write!(f, "(SInt8 {})", i8) }
-			Constant::SInt16(i16) => { write!(f, "(SInt16 {})", i16) }
-			Constant::SInt32(i32) => { write!(f, "(SInt32 {})", i32) }
-			Constant::SInt64(i64) => { write!(f, "(SInt64 {})", i64) }
-			Constant::SInt128(i128) => { write!(f, "(SInt128 {})", i128) }
-			Constant::UInt8(u8) => { write!(f, "(UInt8 {})", u8) }
-			Constant::UInt16(u16) => { write!(f, "(UInt16 {})", u16) }
-			Constant::UInt32(u32) => { write!(f, "(UInt32 {})", u32) }
-			Constant::UInt64(u64) => { write!(f, "(UInt64 {})", u64) }
-			Constant::UInt128(u128) => { write!(f, "(UInt128 {})", u128) }
-			Constant::Real32(f32) => { write!(f, "(Real32 {})", f32) }
-			Constant::Real64(f64) => { write!(f, "(Real64 {})", f64) }
+			Constant::Bool(bool) => { write!(f, "(bool {})", bool) }
+			Constant::SInt8(i8) => { write!(f, "(sint8 {})", i8) }
+			Constant::SInt16(i16) => { write!(f, "(sint16 {})", i16) }
+			Constant::SInt32(i32) => { write!(f, "(sint32 {})", i32) }
+			Constant::SInt64(i64) => { write!(f, "(sint64 {})", i64) }
+			Constant::SInt128(i128) => { write!(f, "(sint128 {})", i128) }
+			Constant::UInt8(u8) => { write!(f, "(uint8 {})", u8) }
+			Constant::UInt16(u16) => { write!(f, "(uint16 {})", u16) }
+			Constant::UInt32(u32) => { write!(f, "(uint32 {})", u32) }
+			Constant::UInt64(u64) => { write!(f, "(uint64 {})", u64) }
+			Constant::UInt128(u128) => { write!(f, "(uint128 {})", u128) }
+			Constant::Real32(f32) => { write!(f, "(real32 {})", f32) }
+			Constant::Real64(f64) => { write!(f, "(real64 {})", f64) }
 
 			Constant::Aggregate(ty_key, constant_aggregate_data) => {
 				write!(f, "({} {})", self.child(ty_key), self.child(constant_aggregate_data))
@@ -608,7 +608,7 @@ impl<'data, 'ctx> fmt::Display for IrDataPrinter<'data, 'ctx> {
 			IrData::Switch(cases) => { write!(f, "switch ({})", self.child(cases.as_slice())) }
 			IrData::ComputedBranch(destinations) => { write!(f, "computed_branch ({})", self.child(destinations.as_slice())) }
 
-			IrData::Call => { write!(f, "call)") }
+			IrData::Call => { write!(f, "call") }
 			IrData::Ret => { write!(f, "ret") }
 
 			IrData::Duplicate => { write!(f, "duplicate") }

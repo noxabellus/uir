@@ -28,7 +28,7 @@ impl<T> Stack<T> {
 
 
 	pub fn peek_at (&self, offset: usize) -> Option<&T> {
-		if self.is_empty() || self.len() <= offset { return None }
+		if self.len() <= offset { return None }
 
 		let index = self.len() - (offset + 1);
 
@@ -36,7 +36,7 @@ impl<T> Stack<T> {
 	}
 
 	pub fn peek_at_mut (&mut self, offset: usize) -> Option<&mut T> {
-		if self.is_empty() || self.len() <= offset { return None }
+		if self.len() <= offset { return None }
 
 		let index = self.len() - (offset + 1);
 
@@ -57,7 +57,7 @@ impl<T> Stack<T> {
 	}
 
 	pub fn pop_n (&mut self, n: usize) -> bool {
-		if self.len() > n { return false }
+		if self.len() < n { return false }
 
 		unsafe { self.items.set_len(self.len() - n) }
 

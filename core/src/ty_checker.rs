@@ -239,10 +239,16 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		use BinaryOp::*;
 
 		Ok(match op {
-			Add | Sub | Mul | Div | Rem | Lt | Gt | Le | Ge
+			Add | Sub | Mul | Div | Rem
 			=> {
 				assert(ty.is_arithmetic(), invalid_operand_err)?;
 				ty
+			}
+
+			Lt | Gt | Le | Ge
+			=> {
+				assert(ty.is_arithmetic(), invalid_operand_err)?;
+				self.builder.bool_ty()
 			}
 
 			Eq | Ne
@@ -727,11 +733,45 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				self.stack.push(value)
 			}
 
-			| Branch(_)
-			| CondBranch(_, _)
-			| Switch(_)
-			| ComputedBranch(_)
+			Branch(_)
 			=> {
+				self.set_out_values(parent)
+			}
+
+
+			CondBranch(_, _)
+			=> {
+				let pred = self.builder.get_ty(self.stack.pop()?)?;
+				let bool_ty = self.builder.bool_ty();
+
+				assert(self.ty_eq(bool_ty, pred), TyErr::ExpectedTy(bool_ty.as_key(), pred.as_key()))?;
+
+				self.set_out_values(parent)
+			}
+
+			Switch(edges)
+			=> {
+				let pred = self.builder.get_ty(self.stack.pop()?)?;
+
+				assert(pred.has_equality(), TyErr::InvalidSwitchTy(pred.as_key()))?;
+
+				for (constant, _) in edges.iter() {
+					let const_ty = self.get_constant_ty(constant)?;
+
+					assert(self.ty_eq(pred, const_ty), TyErr::ExpectedTy(pred.as_key(), const_ty.as_key()))?;
+				}
+
+				self.set_out_values(parent)
+			}
+
+			ComputedBranch(_)
+			=> {
+				// TODO: do these have to be constants?
+
+				let dest = self.builder.get_ty(self.stack.pop()?)?;
+
+				assert(dest.is_block(), TyErr::ExpectedBlock(dest.as_key()))?;
+
 				self.set_out_values(parent)
 			}
 
