@@ -57,7 +57,8 @@ mod test {
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("add.ir");
-		let ps = PrinterState::with_function(&context, context.functions.get(function).unwrap());
+		let cpred = context.predict_collapse();
+		let ps = PrinterState::with_function(&cpred, context.functions.get(function).unwrap());
 		let output = format!("{}", ps.print_own_function());
 		write(&path, &output).unwrap();
 		println!("{}", &output);
@@ -138,7 +139,8 @@ mod test {
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("fib.ir");
-		let ps = PrinterState::with_function(&context, context.functions.get(function).unwrap());
+		let cpred = context.predict_collapse();
+		let ps = PrinterState::with_function(&cpred, context.functions.get(function).unwrap());
 		let output = format!("{}", ps.print_own_function());
 		write(&path, &output).unwrap();
 		println!("{}", &output);

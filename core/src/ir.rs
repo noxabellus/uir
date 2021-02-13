@@ -1,6 +1,6 @@
 use std::{fmt, ops};
 
-use support::slotmap::{KeyedMut, Slotmap};
+use support::slotmap::{KeyedMut, Slotmap, SlotmapCollapsePredictor};
 
 use super::{
 	cfg::Cfg,
@@ -324,6 +324,21 @@ pub struct Meta {
 	pub ir: Slotmap<IrMetaKey, IrMeta>,
 }
 
+impl Meta {
+	pub fn predict_collapse (&self) -> MetaCollapsePredictor<'_> {
+		MetaCollapsePredictor {
+			ty: self.ty.predict_collapse(),
+			function: self.function.predict_collapse(),
+			param: self.param.predict_collapse(),
+			local: self.local.predict_collapse(),
+			global: self.global.predict_collapse(),
+			ir: self.ir.predict_collapse(),
+		}
+	}
+}
+
+
+
 #[derive(Debug, Default)]
 pub struct Context {
 	pub target: Box<dyn Target>,
@@ -359,4 +374,43 @@ impl Context {
 
 		self.tys.insert(ty)
 	}
+
+	pub fn predict_collapse (&self) -> ContextCollpasePredictor<'_> {
+		ContextCollpasePredictor {
+			context: self,
+
+			srcs: self.srcs.predict_collapse(),
+
+			tys: self.tys.predict_collapse(),
+			functions: self.functions.predict_collapse(),
+			globals: self.globals.predict_collapse(),
+
+			meta: self.meta.predict_collapse(),
+		}
+	}
+}
+
+
+
+#[derive(Debug)]
+pub struct MetaCollapsePredictor<'c> {
+	pub ty: SlotmapCollapsePredictor<'c, TyMetaKey, TyMeta>,
+	pub function: SlotmapCollapsePredictor<'c, FunctionMetaKey, FunctionMeta>,
+	pub param: SlotmapCollapsePredictor<'c, ParamMetaKey, ParamMeta>,
+	pub local: SlotmapCollapsePredictor<'c, LocalMetaKey, LocalMeta>,
+	pub global: SlotmapCollapsePredictor<'c, GlobalMetaKey, GlobalMeta>,
+	pub ir: SlotmapCollapsePredictor<'c, IrMetaKey, IrMeta>,
+}
+
+#[derive(Debug)]
+pub struct ContextCollpasePredictor<'c> {
+	pub context: &'c Context,
+
+	pub srcs: SlotmapCollapsePredictor<'c, SrcKey, Src>,
+
+	pub tys: SlotmapCollapsePredictor<'c, TyKey, Ty>,
+	pub functions: SlotmapCollapsePredictor<'c, FunctionKey, Function>,
+	pub globals: SlotmapCollapsePredictor<'c, GlobalKey, Global>,
+
+	pub meta: MetaCollapsePredictor<'c>
 }

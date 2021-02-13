@@ -403,6 +403,22 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 			values: vec.into_boxed_slice()
 		}
 	}
+
+	pub fn predict_collapse (&self) -> SlotmapCollapsePredictor<'_, K, V> {
+		let mut key_to_idx = HashMap::default();
+		let mut idx_to_key = HashMap::default();
+
+		for (i, (&k, _)) in self.iter().enumerate() {
+			key_to_idx.insert(k, i);
+			idx_to_key.insert(i, k);
+		}
+
+		SlotmapCollapsePredictor {
+			key_to_idx,
+			idx_to_key,
+			base: self
+		}
+	}
 }
 
 
@@ -438,6 +454,40 @@ impl<K: Key, V: Keyable<Key = K>> CollapsedSlotmap<K, V> {
 
 	pub fn into_inner (self) -> Box<[V]> {
 		self.values
+	}
+}
+
+
+#[derive(Debug, Clone)]
+pub struct SlotmapCollapsePredictor<'s, K: Key, V: Keyable<Key = K>> {
+	key_to_idx: HashMap<K, usize>,
+	idx_to_key: HashMap<usize, K>,
+	base: &'s Slotmap<K, V>
+}
+
+impl<'s, K: Key, V: Keyable<Key = K>> SlotmapCollapsePredictor<'s, K, V> {
+	pub fn get_index (&self, k: K) -> Option<usize> {
+		self.key_to_idx.get(&k).copied()
+	}
+
+	pub fn get_key (&self, idx: usize) -> Option<K> {
+		self.idx_to_key.get(&idx).copied()
+	}
+
+	pub fn len (&self) -> usize {
+		self.key_to_idx.len()
+	}
+
+	pub fn is_empty (&self) -> bool {
+		self.key_to_idx.is_empty()
+	}
+
+	pub fn get_value (&self, k: K) -> Option<&V> {
+		self.base.get(k)
+	}
+
+	pub fn get_value_by_index (&self, idx: usize) -> Option<&V> {
+		self.get_value(self.get_key(idx)?)
 	}
 }
 

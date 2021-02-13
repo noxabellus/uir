@@ -1,7 +1,9 @@
-use std::{fmt, writeln};
+use std::{fmt, hint::unreachable_unchecked, writeln};
 
 use fmt::Display;
 use support::utils::index_of;
+
+use crate::src::SrcAttribution;
 
 use super::{
 	ir::*,
@@ -83,19 +85,19 @@ impl fmt::Display for CastOp {
 
 #[derive(Debug, Clone, Copy)]
 pub struct PrinterState<'ctx> {
-	ctx: &'ctx Context,
+	ctx: &'ctx ContextCollpasePredictor<'ctx>,
 	function: Option<&'ctx Function>
 }
 
 impl<'ctx> PrinterState<'ctx> {
-	pub fn new (ctx: &'ctx Context) -> Self {
+	pub fn new (ctx: &'ctx ContextCollpasePredictor<'ctx>) -> Self {
 		Self {
 			ctx,
 			function: None
 		}
 	}
 
-	pub fn with_function (ctx: &'ctx Context, function: &'ctx Function) -> Self {
+	pub fn with_function (ctx: &'ctx ContextCollpasePredictor<'ctx>, function: &'ctx Function) -> Self {
 		Self {
 			ctx,
 			function: Some(function)
@@ -125,7 +127,7 @@ pub trait Printer<'data, 'ctx>: Display {
 
 	fn data (&self) -> Self::Data;
 	fn state (&self) -> PrinterState<'ctx>;
-	fn ctx (&self) -> &'ctx Context { self.state().ctx }
+	fn ctx (&self) -> &'ctx ContextCollpasePredictor<'ctx> { self.state().ctx }
 	fn function (&self) -> &'ctx Function { self.state().function.as_ref().unwrap() }
 
 	fn child<P: ?Sized + Printable<'data, 'ctx>> (&self, c: &'data P) -> P::Printer {
@@ -244,7 +246,7 @@ impl<'data, 'ctx> Printer<'data, 'ctx> for TyKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> fmt::Display for TyKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if let Some(ty) = self.ctx().tys.get(*self.0) {
+		if let Some(ty) = self.ctx().tys.get_value(*self.0) {
 			write!(f, "(ty {})", self.child(ty))
 		} else {
 			write!(f, "(ty (INVALID {:?}))", self.0)
@@ -270,14 +272,16 @@ impl<'data, 'ctx> Printer<'data, 'ctx> for GlobalKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> fmt::Display for GlobalKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if let Some(glo) = self.ctx().globals.get(*self.0) {
+		if let Some(glo) = self.ctx().globals.get_value(*self.data()) {
 			if let Some(name) = glo.name.as_ref() {
 				write!(f, "(global \"{}\")", name)
-			} else {
-				write!(f, "(global {:?})", self.0)
+			} else if let Some(index) = self.ctx().globals.get_index(*self.data()) {
+				write!(f, "(global {})", index)
+			} else { // if we can get the value then we can get the index
+				unsafe { unreachable_unchecked() }
 			}
 		} else {
-			write!(f, "(global (INVALID {:?}))", self.0)
+			write!(f, "(global (INVALID {:?}))", self.data())
 		}
 	}
 }
@@ -300,11 +304,13 @@ impl<'data, 'ctx> Printer<'data, 'ctx> for FunctionKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> fmt::Display for FunctionKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if let Some(func) = self.ctx().functions.get(*self.0) {
+		if let Some(func) = self.ctx().functions.get_value(*self.0) {
 			if let Some(name) = func.name.as_ref() {
 				write!(f, "(function \"{}\")", name)
-			} else {
-				write!(f, "(function {:?})", self.0)
+			} else if let Some(index) = self.ctx().functions.get_index(*self.data()) {
+				write!(f, "(function {})", index)
+			} else { // if we can get the value then we can get the index
+				unsafe { unreachable_unchecked() }
 			}
 		} else {
 			write!(f, "(function (INVALID {:?}))", self.0)
@@ -401,7 +407,9 @@ impl<'data, 'ctx> fmt::Display for LocalKeyPrinter<'data, 'ctx> {
 			if let Some(name) = local.name.as_ref() {
 				write!(f, "(local \"{}\")", name)
 			} else {
-				write!(f, "(local {:?})", self.0)
+				// TODO this is expensive
+				let pred = func.locals.predict_collapse();
+				write!(f, "(local {})", pred.get_index(*self.0).unwrap())
 			}
 		} else {
 			write!(f, "(local (INVALID {:?}))", self.0)
@@ -412,6 +420,209 @@ impl<'data, 'ctx> fmt::Display for LocalKeyPrinter<'data, 'ctx> {
 impl<'data, 'ctx> Printable<'data, 'ctx> for LocalKey {
 	type Printer = LocalKeyPrinter<'data, 'ctx>;
 	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { LocalKeyPrinter(self, state) }
+}
+
+
+
+pub struct SrcAttributionPrinter<'data, 'ctx> (&'data SrcAttribution, PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for SrcAttributionPrinter<'data, 'ctx> {
+	type Data = &'data SrcAttribution;
+
+	fn data (&self) -> &'data SrcAttribution { self.0 }
+	fn state (&self) -> PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for SrcAttributionPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, ":src (", )?;
+
+		if let Some(src) = self.ctx().srcs.get_value(self.0.key) {
+			write!(f, "{}", src.path.display())?;
+		} else if let Some(idx) = self.ctx().srcs.get_index(self.0.key) {
+			write!(f, "{}", idx)?;
+		} else {
+			write!(f, "(INVALID {:?})", self.0.key)?;
+		}
+
+		if let Some(range) = self.0.range {
+			if let Some(src) = self.ctx().srcs.get_value(self.0.key) {
+				let (line, col) = src.get_line_col(range.0);
+				write!(f, ":{}:{}", line, col)?;
+
+				let (eline, ecol) = src.get_line_col(range.1);
+				write!(f, " to {}:{}", eline, ecol)?;
+			}
+		}
+
+		write!(f, ")")
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for SrcAttribution {
+	type Printer = SrcAttributionPrinter<'data, 'ctx>;
+	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { SrcAttributionPrinter(self, state) }
+}
+
+
+
+pub struct ParamMetaKeyPrinter<'data, 'ctx> (&'data ParamMetaKey, PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for ParamMetaKeyPrinter<'data, 'ctx> {
+	type Data = &'data ParamMetaKey;
+
+	fn data (&self) -> &'data ParamMetaKey { self.0 }
+	fn state (&self) -> PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for ParamMetaKeyPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, ":#")?;
+
+		if let Some(idx) = self.ctx().meta.param.get_index(*self.0) {
+			write!(f, "{}", idx)
+		} else {
+			write!(f, "(INVALID {:?})", self.0)
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for ParamMetaKey {
+	type Printer = ParamMetaKeyPrinter<'data, 'ctx>;
+	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { ParamMetaKeyPrinter(self, state) }
+}
+
+
+
+pub struct LocalMetaKeyPrinter<'data, 'ctx> (&'data LocalMetaKey, PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for LocalMetaKeyPrinter<'data, 'ctx> {
+	type Data = &'data LocalMetaKey;
+
+	fn data (&self) -> &'data LocalMetaKey { self.0 }
+	fn state (&self) -> PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for LocalMetaKeyPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, ":#")?;
+
+		if let Some(idx) = self.ctx().meta.local.get_index(*self.0) {
+			write!(f, "{}", idx)
+		} else {
+			write!(f, "(INVALID {:?})", self.0)
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for LocalMetaKey {
+	type Printer = LocalMetaKeyPrinter<'data, 'ctx>;
+	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { LocalMetaKeyPrinter(self, state) }
+}
+
+
+
+pub struct IrMetaKeyPrinter<'data, 'ctx> (&'data IrMetaKey, PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for IrMetaKeyPrinter<'data, 'ctx> {
+	type Data = &'data IrMetaKey;
+
+	fn data (&self) -> &'data IrMetaKey { self.0 }
+	fn state (&self) -> PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for IrMetaKeyPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, ":#")?;
+
+		if let Some(idx) = self.ctx().meta.ir.get_index(*self.0) {
+			write!(f, "{}", idx)
+		} else {
+			write!(f, "(INVALID {:?})", self.0)
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for IrMetaKey {
+	type Printer = IrMetaKeyPrinter<'data, 'ctx>;
+	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { IrMetaKeyPrinter(self, state) }
+}
+
+
+
+pub struct TyMetaKeyPrinter<'data, 'ctx> (&'data TyMetaKey, PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for TyMetaKeyPrinter<'data, 'ctx> {
+	type Data = &'data TyMetaKey;
+
+	fn data (&self) -> &'data TyMetaKey { self.0 }
+	fn state (&self) -> PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for TyMetaKeyPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, ":#")?;
+
+		if let Some(idx) = self.ctx().meta.ty.get_index(*self.0) {
+			write!(f, "{}", idx)
+		} else {
+			write!(f, "(INVALID {:?})", self.0)
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for TyMetaKey {
+	type Printer = TyMetaKeyPrinter<'data, 'ctx>;
+	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { TyMetaKeyPrinter(self, state) }
+}
+
+
+
+pub struct FunctionMetaKeyPrinter<'data, 'ctx> (&'data FunctionMetaKey, PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for FunctionMetaKeyPrinter<'data, 'ctx> {
+	type Data = &'data FunctionMetaKey;
+
+	fn data (&self) -> &'data FunctionMetaKey { self.0 }
+	fn state (&self) -> PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for FunctionMetaKeyPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, ":#")?;
+
+		if let Some(idx) = self.ctx().meta.function.get_index(*self.0) {
+			write!(f, "{}", idx)
+		} else {
+			write!(f, "(INVALID {:?})", self.0)
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for FunctionMetaKey {
+	type Printer = FunctionMetaKeyPrinter<'data, 'ctx>;
+	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { FunctionMetaKeyPrinter(self, state) }
+}
+
+
+
+pub struct GlobalMetaKeyPrinter<'data, 'ctx> (&'data GlobalMetaKey, PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for GlobalMetaKeyPrinter<'data, 'ctx> {
+	type Data = &'data GlobalMetaKey;
+
+	fn data (&self) -> &'data GlobalMetaKey { self.0 }
+	fn state (&self) -> PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for GlobalMetaKeyPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, ":#")?;
+
+		if let Some(idx) = self.ctx().meta.global.get_index(*self.0) {
+			write!(f, "{}", idx)
+		} else {
+			write!(f, "(INVALID {:?})", self.0)
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for GlobalMetaKey {
+	type Printer = GlobalMetaKeyPrinter<'data, 'ctx>;
+	fn printer (&'data self, state: PrinterState<'ctx>) -> Self::Printer { GlobalMetaKeyPrinter(self, state) }
 }
 
 
@@ -454,7 +665,17 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 					write!(f, "()")
 				}
 			}
+		}?;
+
+		if let Some(src_attr) = self.0.src.as_ref() {
+			write!(f, " {}", self.child(src_attr))?;
 		}
+
+		for meta_key in self.0.meta.iter() {
+			write!(f, " {}", self.child(meta_key))?;
+		}
+
+		Ok(())
 	}
 }
 
@@ -479,7 +700,7 @@ impl<'data, 'ctx> fmt::Display for ConstantPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self.0 {
 			Constant::Null(ty_key) => {
-				write!(f, "({} null)", self.child(ty_key))
+				write!(f, "(null {})", self.child(ty_key))
 			}
 
 			Constant::Bool(bool) => { write!(f, "(bool {})", bool) }
@@ -626,8 +847,6 @@ impl<'data, 'ctx> Printable<'data, 'ctx> for IrData {
 
 
 
-
-
 pub struct IrPrinter<'data, 'ctx> (&'data Ir, PrinterState<'ctx>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for IrPrinter<'data, 'ctx> {
 	type Data = &'data Ir;
@@ -642,6 +861,14 @@ impl<'data, 'ctx> fmt::Display for IrPrinter<'data, 'ctx> {
 
 		if let Some(name) = self.0.name.as_ref() {
 			write!(f, " :name \"{}\"", name)?;
+		}
+
+		if let Some(src_attr) = self.0.src.as_ref() {
+			write!(f, " {}", self.child(src_attr))?;
+		}
+
+		for meta_key in self.0.meta.iter() {
+			write!(f, " {}", self.child(meta_key))?;
 		}
 
 		write!(f, ")")
@@ -710,9 +937,17 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "(function")?;
 
-
+		// TODO need to print the index if its unnamed but theres currently no way to retrieve it
 		if let Some(name) = self.0.name.as_ref() {
 			write!(f, " :name \"{}\"", name)?;
+		}
+
+		if let Some(src) = self.0.src.as_ref() {
+			write!(f, " {}", self.child(src))?;
+		}
+
+		for meta_key in self.0.meta.iter() {
+			write!(f, " {}", self.child(meta_key))?;
 		}
 
 
@@ -721,8 +956,22 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 		for (i, &param_key) in self.0.param_order.iter().enumerate() {
 			let param = self.0.param_data.get(param_key).unwrap();
 
-			if let Some(name) = param.name.as_ref() {
-				write!(f, "({} :name \"{}\")", self.child(&param.ty), name)?;
+			if param.name.is_some() || param.src.is_some() || !param.meta.is_empty() {
+				write!(f, "({}", self.child(&param.ty))?;
+
+				if let Some(name) = param.name.as_ref() {
+					write!(f, " :name \"{}\"", name)?;
+				}
+
+				if let Some(src_attr) = self.0.src.as_ref() {
+					write!(f, " {}", self.child(src_attr))?;
+				}
+
+				for meta_key in self.0.meta.iter() {
+					write!(f, " {}", self.child(meta_key))?;
+				}
+
+				write!(f, ")")?;
 			} else {
 				self.child(&param.ty).fmt(f)?;
 			}
@@ -751,8 +1000,22 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 		for (i, &local_key) in self.0.locals.keys().enumerate() {
 			let local = self.0.locals.get(local_key).unwrap();
 
-			if let Some(name) = local.name.as_ref() {
-				write!(f, "({} :name \"{}\")", self.child(&local.ty), name)?;
+			if local.name.is_some() || local.src.is_some() || !local.meta.is_empty() {
+				write!(f, "({}", self.child(&local.ty))?;
+
+				if let Some(name) = local.name.as_ref() {
+					write!(f, " :name \"{}\"", name)?;
+				}
+
+				if let Some(src_attr) = self.0.src.as_ref() {
+					write!(f, " {}", self.child(src_attr))?;
+				}
+
+				for meta_key in self.0.meta.iter() {
+					write!(f, " {}", self.child(meta_key))?;
+				}
+
+				write!(f, ")")?;
 			} else {
 				self.child(&local.ty).fmt(f)?;
 			}
