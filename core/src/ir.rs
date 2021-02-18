@@ -1,4 +1,4 @@
-use std::{fmt, ops};
+use std::{fmt, hint::unreachable_unchecked, ops};
 
 use support::slotmap::{KeyedMut, Slotmap, SlotmapCollapsePredictor};
 
@@ -164,7 +164,11 @@ impl Default for IrData {
 }
 
 impl IrData {
-	pub fn is_terminator(&self) -> bool {
+	pub fn is_phi (&self) -> bool {
+		matches!(self, IrData::Phi(_))
+	}
+
+	pub fn is_terminator (&self) -> bool {
 		use IrData::*;
 
 		matches!(
@@ -413,4 +417,46 @@ pub struct ContextCollpasePredictor<'c> {
 	pub globals: SlotmapCollapsePredictor<'c, GlobalKey, Global>,
 
 	pub meta: MetaCollapsePredictor<'c>
+}
+
+impl<'c> ContextCollpasePredictor<'c> {
+	pub fn function_predictor (&self, key: FunctionKey) -> Option<FunctionCollapsePredictor<'c>> {
+		if let Some(index) = self.functions.get_index(key) {
+			if let Some(value) = self.context.functions.get(key) {
+				return Some(value.predict_collapse(index, key))
+			} else {
+				// SAFETY: if there is an index there must be a value
+				unsafe { unreachable_unchecked() }
+			}
+		} else {
+			None
+		}
+	}
+}
+
+
+#[derive(Debug)]
+pub struct FunctionCollapsePredictor<'c> {
+	pub function: &'c Function,
+	pub own_index: usize,
+	pub own_key: FunctionKey,
+	pub locals: SlotmapCollapsePredictor<'c, LocalKey, Local>,
+}
+
+impl<'c> ops::Deref for FunctionCollapsePredictor<'c> {
+	type Target = Function;
+	fn deref (&self) -> &Self::Target {
+		&self.function
+	}
+}
+
+impl Function {
+	pub fn predict_collapse (&self, own_index: usize, own_key: FunctionKey,) -> FunctionCollapsePredictor<'_> {
+		FunctionCollapsePredictor {
+			function: self,
+			own_index,
+			own_key,
+			locals: self.locals.predict_collapse()
+		}
+	}
 }

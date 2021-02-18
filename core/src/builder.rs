@@ -9,18 +9,29 @@ use super::{
 	ty::*,
 	ir::*,
 	cfg::*,
-	ty_checker::{ self, * },
+	ty_checker
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FunctionErrLocation {
+	Root,
+	Block(BlockKey),
+	Node(BlockKey, usize),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IrErr {
-	NoActiveBlock,
+pub enum IrErrLocation {
+	None,
+	Ty(TyKey),
+	Global(GlobalKey),
+	Function(FunctionKey, FunctionErrLocation),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IrErrData {
 	InvalidParamKey(ParamKey),
 	InvalidParamIndex(usize),
 	InvalidLocalKey(LocalKey),
-	ExpectedAggregateTy(TyKey),
-	InvalidAggregateIndex(TyKey, u64),
 	InvalidBlockKey(BlockKey),
 	InvalidBlockIndex(usize),
 	InvalidTyKey(TyKey),
@@ -29,27 +40,49 @@ pub enum IrErr {
 	InvalidNodeIndex(usize),
 	CfgErr(CfgErr),
 	TyErr(TyErr),
-	NodeAfterTerminator(BlockKey, usize),
 	FunctionAlreadyDefined(FunctionKey),
 }
 
-impl From<CfgErr> for IrErr {
-	fn from (e: CfgErr) -> IrErr { IrErr::CfgErr(e) }
+impl From<CfgErr> for IrErrData {
+	fn from (e: CfgErr) -> IrErrData { IrErrData::CfgErr(e) }
 }
 
-impl From<TyErr> for IrErr {
-	fn from (e: TyErr) -> IrErr { IrErr::TyErr(e) }
+impl From<TyErr> for IrErrData {
+	fn from (e: TyErr) -> IrErrData { IrErrData::TyErr(e) }
 }
 
-impl From<TyCkErr> for IrErr {
-	fn from (e: TyCkErr) -> IrErr {
-		match e {
-			TyCkErr::TyErr(e) => e.into(),
-			TyCkErr::IrErr(e) => e
-		}
-	}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IrErr {
+	pub data: IrErrData,
+	pub location: IrErrLocation,
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FunctionErr {
+	pub data: IrErrData,
+	pub location: FunctionErrLocation,
+}
+
+// impl From<IrErrData> for IrErr {
+// 	fn from (data: IrErrData) -> IrErr {
+// 		IrErr {
+// 			data,
+// 			location: IrErrLocation::None
+// 		}
+// 	}
+// }
+
+// impl From<CfgErr> for IrErr {
+// 	fn from (e: CfgErr) -> IrErr { IrErrData::from(e).into() }
+// }
+
+// impl From<TyErr> for IrErr {
+// 	fn from (e: TyErr) -> IrErr { IrErrData::from(e).into() }
+// }
+
+pub type IrDataResult<T = ()> = Result<T, IrErrData>;
+pub type FunctionResult<T = ()> = Result<T, FunctionErr>;
 pub type IrResult<T = ()> = Result<T, IrErr>;
 
 
@@ -67,7 +100,97 @@ impl InsertionCursor {
 }
 
 
+pub trait Locate<L> {
+	type Result;
+	fn at (self, location: L) -> Self::Result;
+}
 
+impl Locate<IrErrLocation> for IrErrData {
+	type Result = IrErr;
+	fn at (self, location: IrErrLocation) -> IrErr {
+		IrErr {
+			data: self,
+			location
+		}
+	}
+}
+
+impl Locate<FunctionErrLocation> for IrErrData {
+	type Result = FunctionErr;
+	fn at (self, location: FunctionErrLocation) -> FunctionErr {
+		FunctionErr {
+			data: self,
+			location
+		}
+	}
+}
+
+impl Locate<IrErrLocation> for TyErr {
+	type Result = IrErr;
+	fn at (self, location: IrErrLocation) -> IrErr {
+		IrErr {
+			data: IrErrData::TyErr(self),
+			location
+		}
+	}
+}
+
+impl Locate<FunctionErrLocation> for TyErr {
+	type Result = FunctionErr;
+	fn at (self, location: FunctionErrLocation) -> FunctionErr {
+		FunctionErr {
+			data: IrErrData::TyErr(self),
+			location
+		}
+	}
+}
+
+impl Locate<IrErrLocation> for CfgErr {
+	type Result = IrErr;
+	fn at (self, location: IrErrLocation) -> IrErr {
+		IrErr {
+			data: IrErrData::CfgErr(self),
+			location
+		}
+	}
+}
+
+impl Locate<FunctionErrLocation> for CfgErr {
+	type Result = FunctionErr;
+	fn at (self, location: FunctionErrLocation) -> FunctionErr {
+		FunctionErr {
+			data: IrErrData::CfgErr(self),
+			location
+		}
+	}
+}
+
+impl Locate<FunctionKey> for FunctionErrLocation {
+	type Result = IrErrLocation;
+	fn at (self, location: FunctionKey) -> IrErrLocation {
+		IrErrLocation::Function(location, self)
+	}
+}
+
+impl Locate<FunctionKey> for FunctionErr {
+	type Result = IrErr;
+	fn at (self, location: FunctionKey) -> IrErr {
+		IrErr {
+			data: self.data,
+			location: self.location.at(location)
+		}
+	}
+}
+
+
+impl<T, E, D> Locate<D> for Result<T, E>
+where E: Locate<D>
+{
+	type Result = Result<T, E::Result>;
+	fn at (self, location: D) -> Self::Result {
+		self.map_err(|e| e.at(location))
+	}
+}
 
 
 
@@ -513,19 +636,19 @@ impl<'c> Builder<'c> {
 	pub fn real64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.real64).unwrap() }
 
 
-	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<TyManipulator> {
+	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrDataResult<TyManipulator> {
 		let target_ty = self.get_ty(target_ty)?.as_key();
 
 		Ok(TyManipulator(self.ctx.add_ty(TyData::Pointer { target_ty }.into())))
 	}
 
-	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<TyManipulator> {
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrDataResult<TyManipulator> {
 		let element_ty = self.get_ty(element_ty)?.as_key();
 
 		Ok(TyManipulator(self.ctx.add_ty(TyData::Array { length, element_ty }.into())))
 	}
 
-	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<TyManipulator> {
+	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrDataResult<TyManipulator> {
 		for &ft in field_tys.iter() {
 			self.get_ty(ft)?;
 		}
@@ -533,7 +656,7 @@ impl<'c> Builder<'c> {
 		Ok(TyManipulator(self.ctx.add_ty(TyData::Structure { field_tys }.into())))
 	}
 
-	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<TyManipulator> {
+	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrDataResult<TyManipulator> {
 		for &pt in parameter_tys.iter() {
 			self.get_ty(pt)?;
 		}
@@ -547,27 +670,27 @@ impl<'c> Builder<'c> {
 
 
 
-	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Keyed<Ty>> {
+	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Keyed<Ty>> {
 		let ty_key = ty_key.as_key();
 
-		self.ctx.tys.get_keyed(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
+		self.ctx.tys.get_keyed(ty_key).ok_or(IrErrData::InvalidTyKey(ty_key))
 	}
 
-	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<KeyedMut<Ty>> {
+	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrDataResult<KeyedMut<Ty>> {
 		let ty_key = ty_key.as_key();
 
-		self.ctx.tys.get_keyed_mut(ty_key).ok_or(IrErr::InvalidTyKey(ty_key))
+		self.ctx.tys.get_keyed_mut(ty_key).ok_or(IrErrData::InvalidTyKey(ty_key))
 	}
 
 
-	pub fn get_finalized_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Keyed<Ty>> {
+	pub fn get_finalized_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Keyed<Ty>> {
 		let ty_key = ty_key.as_key();
 
 		self.finalize_ty(ty_key)?;
 		self.get_ty(ty_key)
 	}
 
-	pub fn get_finalized_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<KeyedMut<Ty>> {
+	pub fn get_finalized_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrDataResult<KeyedMut<Ty>> {
 		let ty_key = ty_key.as_key();
 
 		self.finalize_ty(ty_key)?;
@@ -575,34 +698,34 @@ impl<'c> Builder<'c> {
 	}
 
 
-	pub fn get_global<K: AsKey<GlobalKey>> (&self, global_key: K) -> IrResult<Keyed<Global>> {
+	pub fn get_global<K: AsKey<GlobalKey>> (&self, global_key: K) -> IrDataResult<Keyed<Global>> {
 		let global_key = global_key.as_key();
 
-		self.ctx.globals.get_keyed(global_key).ok_or(IrErr::InvalidGlobalKey(global_key))
+		self.ctx.globals.get_keyed(global_key).ok_or(IrErrData::InvalidGlobalKey(global_key))
 	}
 
-	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<GlobalManipulator> {
+	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrDataResult<GlobalManipulator> {
 		let global_key = global_key.as_key();
 
-		self.ctx.globals.get_keyed_mut(global_key).ok_or(IrErr::InvalidGlobalKey(global_key)).map(GlobalManipulator)
+		self.ctx.globals.get_keyed_mut(global_key).ok_or(IrErrData::InvalidGlobalKey(global_key)).map(GlobalManipulator)
 	}
 
 
-	pub fn get_function<K: AsKey<FunctionKey>> (&self, function_key: K) -> IrResult<Keyed<Function>> {
+	pub fn get_function<K: AsKey<FunctionKey>> (&self, function_key: K) -> IrDataResult<Keyed<Function>> {
 		let function_key = function_key.as_key();
 
-		self.ctx.functions.get_keyed(function_key).ok_or(IrErr::InvalidFunctionKey(function_key))
+		self.ctx.functions.get_keyed(function_key).ok_or(IrErrData::InvalidFunctionKey(function_key))
 	}
 
-	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrResult<KeyedMut<Function>> {
+	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrDataResult<KeyedMut<Function>> {
 		let function_key = function_key.as_key();
 
-		self.ctx.functions.get_keyed_mut(function_key).ok_or(IrErr::InvalidFunctionKey(function_key))
+		self.ctx.functions.get_keyed_mut(function_key).ok_or(IrErrData::InvalidFunctionKey(function_key))
 	}
 
 
 
-	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<Layout>> {
+	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<Layout>> {
 		use TyData::*;
 
 		let ty_key = ty_key.as_key();
@@ -659,15 +782,15 @@ impl<'c> Builder<'c> {
 		Ok(Ref::map(base, |opt| opt.as_ref().unwrap()))
 	}
 
-	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> {
+	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> {
 		Ok(self.finalize_ty(ty_key)?.size)
 	}
 
-	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> {
+	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> {
 		Ok(self.finalize_ty(ty_key)?.align)
 	}
 
-	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<[u64]>> {
+	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<[u64]>> {
 		let ty_key = ty_key.as_key();
 
 		if self.get_ty(ty_key)?.is_structure() {
@@ -723,36 +846,44 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn finalize (mut self) -> IrResult<KeyedMut<'b, Function>> {
+	pub fn finalize (mut self) -> (Keyed<'b, Function>, IrResult) {
 		self.clear_active_block();
 
-		let ty = self.generate_own_ty()?.as_key();
+		let function_key = self.function_key;
+
+		if let Err(e) = self.generate_own_ty() {
+			return (
+				self.builder.ctx.functions.define(function_key, self.function).unwrap().into_keyed(),
+				Err(e.at(FunctionErrLocation::Root.at(function_key)))
+			)
+		}
 
 		let builder = self.builder;
-		let mut function = self.function;
-		let function_key = self.function_key;
+		let function = self.function;
 
 		builder.ctx.functions
 			.define(
-				self.function_key,
-				Function {
-					ty,
-					name: function.name.clone(),
-					.. Function::default()
-				}
+				function_key,
+				function
 			)
-			.ok_or(IrErr::FunctionAlreadyDefined(function_key))?;
+			.unwrap();
 
-		let cfg = cfg_generator::generate(&function)?;
-		let cfg = ty_checker::check(builder, cfg, &function)?;
+		match cfg_generator::generate(builder, function_key) {
+			Ok(cfg) => {
+				match ty_checker::check(builder, cfg, function_key) {
+					Ok(cfg) => {
+						let mut function = builder.get_function_mut(function_key).unwrap();
 
-		function.cfg = cfg;
+						function.cfg = cfg;
 
-		let mut slot = builder.get_function_mut(function_key)?;
+						return (function.into_keyed(), Ok(()))
+					}
 
-		*slot = function;
-
-		Ok(slot)
+					Err(e) => return (builder.get_function(function_key).unwrap(), Err(e))
+				};
+			},
+			Err(e) => return (builder.get_function(function_key).unwrap(), Err(e))
+		}
 	}
 
 
@@ -780,7 +911,7 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn generate_own_ty (&mut self) -> IrResult<TyManipulator> {
+	pub fn generate_own_ty (&mut self) -> IrDataResult<TyManipulator> {
 		let result_ty = if let Some(result_ty) = self.function.result {
 			self.builder.get_ty(result_ty)?;
 			Some(result_ty)
@@ -835,18 +966,18 @@ impl<'b> FunctionBuilder<'b> {
 	pub fn real32_ty (&self) -> Keyed<Ty> { self.builder.real32_ty() }
 	pub fn real64_ty (&self) -> Keyed<Ty> { self.builder.real64_ty() }
 
-	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrResult<TyManipulator> { self.builder.pointer_ty(target_ty) }
-	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrResult<TyManipulator> { self.builder.array_ty(length, element_ty) }
-	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrResult<TyManipulator> { self.builder.structure_ty(field_tys) }
-	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrResult<TyManipulator> { self.builder.function_ty(parameter_tys, result_ty) }
+	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrDataResult<TyManipulator> { self.builder.pointer_ty(target_ty) }
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrDataResult<TyManipulator> { self.builder.array_ty(length, element_ty) }
+	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrDataResult<TyManipulator> { self.builder.structure_ty(field_tys) }
+	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrDataResult<TyManipulator> { self.builder.function_ty(parameter_tys, result_ty) }
 
-	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Keyed<Ty>> { self.builder.get_ty(ty_key) }
-	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrResult<KeyedMut<Ty>> { self.builder.get_ty_mut(ty_key) }
+	pub fn get_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Keyed<Ty>> { self.builder.get_ty(ty_key) }
+	pub fn get_ty_mut<K: AsKey<TyKey>> (&mut self, ty_key: K) -> IrDataResult<KeyedMut<Ty>> { self.builder.get_ty_mut(ty_key) }
 
-	pub fn get_global<K: AsKey<GlobalKey>> (&self, global_key: K) -> IrResult<Keyed<Global>> { self.builder.get_global(global_key) }
-	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrResult<GlobalManipulator> { self.builder.get_global_mut(global_key) }
+	pub fn get_global<K: AsKey<GlobalKey>> (&self, global_key: K) -> IrDataResult<Keyed<Global>> { self.builder.get_global(global_key) }
+	pub fn get_global_mut<K: AsKey<GlobalKey>> (&mut self, global_key: K) -> IrDataResult<GlobalManipulator> { self.builder.get_global_mut(global_key) }
 
-	pub fn get_function<K: AsKey<FunctionKey>> (&self, function_key: K) -> IrResult<Keyed<Function>> {
+	pub fn get_function<K: AsKey<FunctionKey>> (&self, function_key: K) -> IrDataResult<Keyed<Function>> {
 		let function_key = function_key.as_key();
 
 		if function_key == self.function_key {
@@ -856,7 +987,7 @@ impl<'b> FunctionBuilder<'b> {
 		self.builder.get_function(function_key)
 	}
 
-	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrResult<KeyedMut<Function>> {
+	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrDataResult<KeyedMut<Function>> {
 		let function_key = function_key.as_key();
 
 		if function_key == self.function_key {
@@ -866,11 +997,11 @@ impl<'b> FunctionBuilder<'b> {
 		self.builder.get_function_mut(function_key)
 	}
 
-	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<Layout>> { self.builder.finalize_ty(ty_key) }
+	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<Layout>> { self.builder.finalize_ty(ty_key) }
 
-	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> { self.builder.size_of(ty_key) }
-	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<u64> { self.builder.align_of(ty_key) }
-	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrResult<Ref<[u64]>> { self.builder.field_offsets_of(ty_key) }
+	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> { self.builder.size_of(ty_key) }
+	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> { self.builder.align_of(ty_key) }
+	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<[u64]>> { self.builder.field_offsets_of(ty_key) }
 
 
 
@@ -880,16 +1011,16 @@ impl<'b> FunctionBuilder<'b> {
 		LocalManipulator(self.function.locals.insert(Local { ty, .. Local::default() }))
 	}
 
-	pub fn get_local<K: AsKey<LocalKey>> (&self, local_key: K) -> IrResult<Keyed<Local>> {
+	pub fn get_local<K: AsKey<LocalKey>> (&self, local_key: K) -> IrDataResult<Keyed<Local>> {
 		let local_key = local_key.as_key();
 
-		self.function.locals.get_keyed(local_key).ok_or(IrErr::InvalidLocalKey(local_key))
+		self.function.locals.get_keyed(local_key).ok_or(IrErrData::InvalidLocalKey(local_key))
 	}
 
-	pub fn get_local_mut<K: AsKey<LocalKey>> (&mut self, local_key: K) -> IrResult<LocalManipulator> {
+	pub fn get_local_mut<K: AsKey<LocalKey>> (&mut self, local_key: K) -> IrDataResult<LocalManipulator> {
 		let local_key = local_key.as_key();
 
-		self.function.locals.get_keyed_mut(local_key).ok_or(IrErr::InvalidLocalKey(local_key)).map(LocalManipulator)
+		self.function.locals.get_keyed_mut(local_key).ok_or(IrErrData::InvalidLocalKey(local_key)).map(LocalManipulator)
 	}
 
 
@@ -981,7 +1112,7 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn get_param_index<K: AsKey<ParamKey>> (&self, param_key: K) -> IrResult<usize> {
+	pub fn get_param_index<K: AsKey<ParamKey>> (&self, param_key: K) -> IrDataResult<usize> {
 		let param_key = param_key.as_key();
 
 		self.function.param_order
@@ -989,19 +1120,19 @@ impl<'b> FunctionBuilder<'b> {
 			.enumerate()
 			.find(|&(_, &pk)| pk == param_key)
 			.map(|(i, _)| i)
-			.ok_or(IrErr::InvalidParamKey(param_key))
+			.ok_or(IrErrData::InvalidParamKey(param_key))
 	}
 
-	pub fn get_param<K: AsKey<ParamKey>> (&self, param_key: K) -> IrResult<Keyed<Param>> {
+	pub fn get_param<K: AsKey<ParamKey>> (&self, param_key: K) -> IrDataResult<Keyed<Param>> {
 		let param_key = param_key.as_key();
 
-		self.function.param_data.get_keyed(param_key).ok_or(IrErr::InvalidParamKey(param_key))
+		self.function.param_data.get_keyed(param_key).ok_or(IrErrData::InvalidParamKey(param_key))
 	}
 
-	pub fn get_param_mut<K: AsKey<ParamKey>> (&mut self, param_key: K) -> IrResult<ParamManipulator> {
+	pub fn get_param_mut<K: AsKey<ParamKey>> (&mut self, param_key: K) -> IrDataResult<ParamManipulator> {
 		let param_key = param_key.as_key();
 
-		self.function.param_data.get_keyed_mut(param_key).ok_or(IrErr::InvalidParamKey(param_key)).map(ParamManipulator)
+		self.function.param_data.get_keyed_mut(param_key).ok_or(IrErrData::InvalidParamKey(param_key)).map(ParamManipulator)
 	}
 
 
@@ -1013,8 +1144,8 @@ impl<'b> FunctionBuilder<'b> {
 		BlockManipulator(block)
 	}
 
-	pub fn insert_block (&mut self, idx: usize, block: Block) -> IrResult<BlockManipulator> {
-		if idx > self.function.block_order.len() { return Err(IrErr::InvalidBlockIndex(idx)) }
+	pub fn insert_block (&mut self, idx: usize, block: Block) -> IrDataResult<BlockManipulator> {
+		if idx > self.function.block_order.len() { return Err(IrErrData::InvalidBlockIndex(idx)) }
 
 		let block = self.function.block_data.insert(block);
 
@@ -1027,11 +1158,11 @@ impl<'b> FunctionBuilder<'b> {
 		self.append_block(Block::default())
 	}
 
-	pub fn insert_new_block (&mut self, idx: usize) -> IrResult<BlockManipulator> {
+	pub fn insert_new_block (&mut self, idx: usize) -> IrDataResult<BlockManipulator> {
 		self.insert_block(idx, Block::default())
 	}
 
-	pub fn remove_block<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrResult<Block> {
+	pub fn remove_block<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrDataResult<Block> {
 		let block_key = block_key.as_key();
 
 		let idx = self.get_block_index(block_key)?;
@@ -1048,7 +1179,7 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn move_block_to_start<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrResult {
+	pub fn move_block_to_start<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrDataResult {
 		let block_key = block_key.as_key();
 
 		let idx = self.get_block_index(block_key)?;
@@ -1059,7 +1190,7 @@ impl<'b> FunctionBuilder<'b> {
 		Ok(())
 	}
 
-	pub fn move_block_to_end<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrResult {
+	pub fn move_block_to_end<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrDataResult {
 		let block_key = block_key.as_key();
 
 		let idx = self.get_block_index(block_key)?;
@@ -1070,7 +1201,7 @@ impl<'b> FunctionBuilder<'b> {
 		Ok(())
 	}
 
-	pub fn move_block_before<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, block_to_move: KA, destination_block: KB) -> IrResult {
+	pub fn move_block_before<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, block_to_move: KA, destination_block: KB) -> IrDataResult {
 		let block_to_move = block_to_move.as_key();
 		let destination_block = destination_block.as_key();
 
@@ -1083,7 +1214,7 @@ impl<'b> FunctionBuilder<'b> {
 		Ok(())
 	}
 
-	pub fn move_block_after<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, block_to_move: KA, destination_block: KB) -> IrResult {
+	pub fn move_block_after<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, block_to_move: KA, destination_block: KB) -> IrDataResult {
 		let block_to_move = block_to_move.as_key();
 		let destination_block = destination_block.as_key();
 
@@ -1096,7 +1227,7 @@ impl<'b> FunctionBuilder<'b> {
 		Ok(())
 	}
 
-	pub fn swap_blocks<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, a: KA, b: KB) -> IrResult {
+	pub fn swap_blocks<KA: AsKey<BlockKey>, KB: AsKey<BlockKey>> (&mut self, a: KA, b: KB) -> IrDataResult {
 		let a = self.get_block_index(a)?;
 		let b = self.get_block_index(b)?;
 
@@ -1106,7 +1237,7 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn get_block_index<K: AsKey<BlockKey>> (&self, block_key: K) -> IrResult<usize> {
+	pub fn get_block_index<K: AsKey<BlockKey>> (&self, block_key: K) -> IrDataResult<usize> {
 		let block_key = block_key.as_key();
 
 		self.function.block_order
@@ -1114,17 +1245,17 @@ impl<'b> FunctionBuilder<'b> {
 			.enumerate()
 			.find(|&(_, &br)| br == block_key)
 			.map(|(i, _)| i)
-			.ok_or(IrErr::InvalidBlockKey(block_key))
+			.ok_or(IrErrData::InvalidBlockKey(block_key))
 	}
 
-	pub fn get_block<K: AsKey<BlockKey>> (&self, block_key: K) -> IrResult<Keyed<Block>> {
+	pub fn get_block<K: AsKey<BlockKey>> (&self, block_key: K) -> IrDataResult<Keyed<Block>> {
 		let block_key = block_key.as_key();
-		self.function.block_data.get_keyed(block_key).ok_or(IrErr::InvalidBlockKey(block_key))
+		self.function.block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key))
 	}
 
-	pub fn get_block_mut<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrResult<BlockManipulator> {
+	pub fn get_block_mut<K: AsKey<BlockKey>> (&mut self, block_key: K) -> IrDataResult<BlockManipulator> {
 		let block_key = block_key.as_key();
-		self.function.block_data.get_keyed_mut(block_key).ok_or(IrErr::InvalidBlockKey(block_key)).map(BlockManipulator)
+		self.function.block_data.get_keyed_mut(block_key).ok_or(IrErrData::InvalidBlockKey(block_key)).map(BlockManipulator)
 	}
 
 	pub fn get_active_block_key (&self) -> Option<BlockKey> {
@@ -1315,12 +1446,12 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn get_node (&self, idx: usize) -> IrResult<&Ir> {
-		self.get_active_block().into_ref().ir.get(idx).ok_or(IrErr::InvalidNodeIndex(idx))
+	pub fn get_node (&self, idx: usize) -> IrDataResult<&Ir> {
+		self.get_active_block().into_ref().ir.get(idx).ok_or(IrErrData::InvalidNodeIndex(idx))
 	}
 
-	pub fn get_node_mut (&mut self, idx: usize) -> IrResult<IrManipulator> {
-		self.get_active_block_mut().into_mut().ir.get_mut(idx).ok_or(IrErr::InvalidNodeIndex(idx)).map(IrManipulator)
+	pub fn get_node_mut (&mut self, idx: usize) -> IrDataResult<IrManipulator> {
+		self.get_active_block_mut().into_mut().ir.get_mut(idx).ok_or(IrErrData::InvalidNodeIndex(idx)).map(IrManipulator)
 	}
 
 

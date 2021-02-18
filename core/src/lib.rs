@@ -10,6 +10,7 @@ pub mod builder_macros;
 pub mod printer;
 
 
+
 #[cfg(test)]
 mod test {
 	use std::{fs::{create_dir_all, write}, path::PathBuf};
@@ -52,14 +53,13 @@ mod test {
 			f.ret();
 		});
 
-		let function = f.finalize()?.as_key();
+		let (function, result) = f.finalize();
+		let function = function.as_key();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("add.ir");
-		let cpred = context.predict_collapse();
-		let ps = PrinterState::with_function(&cpred, context.functions.get(function).unwrap());
-		let output = format!("{}", ps.print_own_function());
+		let output = format!("{}", PrinterState::new(&context).with_result(result).print_function(function));
 		write(&path, &output).unwrap();
 		println!("{}", &output);
 
@@ -101,6 +101,7 @@ mod test {
 		with_block!(f, use_n => {
 			f.param_ref(n);
 			f.load();
+			f.discard();
 			f.branch(end);
 		});
 
@@ -134,14 +135,13 @@ mod test {
 			f.ret();
 		});
 
-		let function = f.finalize()?.as_key();
+		let (function, result) = f.finalize();
+		let function = function.as_key();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("fib.ir");
-		let cpred = context.predict_collapse();
-		let ps = PrinterState::with_function(&cpred, context.functions.get(function).unwrap());
-		let output = format!("{}", ps.print_own_function());
+		let output = format!("{}", PrinterState::new(&context).with_result(result).print_function(function));
 		write(&path, &output).unwrap();
 		println!("{}", &output);
 

@@ -1,21 +1,42 @@
 use super::{
-	builder::{ IrErr, IrResult },
-	ir::{ Function, BlockKey },
-	cfg::Cfg,
+	builder::{ Builder, Locate, IrErrData, FunctionResult, FunctionErrLocation, IrResult },
+	ir::{ Function, FunctionKey, BlockKey },
+	cfg::{ Cfg, CfgErr },
 };
 
 
-fn walk_block (function: &Function, cfg: &mut Cfg, block_key: BlockKey) -> IrResult {
-	let block = function.block_data.get(block_key).ok_or(IrErr::InvalidBlockKey(block_key))?;
+fn walk_block (function: &Function, cfg: &mut Cfg, block_key: BlockKey) -> FunctionResult {
+	let block = function.block_data.get(block_key).ok_or_else(||
+		IrErrData::InvalidBlockKey(block_key)
+			.at(FunctionErrLocation::Root)
+	)?;
 
 	let mut iter = block.ir.iter().enumerate();
+	let mut phi_closed = false;
 
 	while let Some((i, node)) = iter.next() {
-		if node.is_terminator() {
-			node.for_each_edge(|to| cfg.add_edge(block_key, to))?;
+		if node.is_phi() {
+			if phi_closed {
+				return Err(
+					CfgErr::PhiNotAtTop.to_ir()
+						.at(FunctionErrLocation::Node(block_key, i))
+				)
+			}
+		} else {
+			phi_closed = true;
 
-			if iter.next().is_some() {
-				return Err(IrErr::NodeAfterTerminator(block_key, i))
+			if node.is_terminator() {
+				node.for_each_edge(|to| cfg.add_edge(block_key, to)).map_err(|e|
+					e.to_ir()
+						.at(FunctionErrLocation::Node(block_key, i))
+				)?;
+
+				if let Some((i, _)) = iter.next() {
+					return Err(
+						CfgErr::NodeAfterTerminator.to_ir()
+							.at(FunctionErrLocation::Node(block_key, i))
+					)
+				}
 			}
 		}
 	}
@@ -23,11 +44,13 @@ fn walk_block (function: &Function, cfg: &mut Cfg, block_key: BlockKey) -> IrRes
 	Ok(())
 }
 
-pub fn generate (function: &Function) -> IrResult<Cfg> {
+pub fn generate (builder: &mut Builder, function_key: FunctionKey) -> IrResult<Cfg> {
 	let mut cfg = Cfg::default();
 
-	for &block_ref in function.block_order.iter() {
-		walk_block(function, &mut cfg, block_ref)?;
+	let function = builder.get_function(function_key).unwrap().into_ref();
+
+	for &block_key in function.block_order.iter() {
+		walk_block(function, &mut cfg, block_key).at(function_key)?;
 	}
 
 	Ok(cfg)

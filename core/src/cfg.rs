@@ -5,9 +5,11 @@ use std::{
 
 use support::slotmap::AsKey;
 
+
 use super::{
 	ty::TyKey,
 	ir::BlockKey,
+	builder::IrErrData,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -26,6 +28,15 @@ pub enum CfgErr {
 	InvalidEdge(BlockKey, BlockKey),
 	MissingOutEdge(BlockKey),
 	MissingInEdge(BlockKey),
+
+	PhiNotAtTop,
+	NodeAfterTerminator,
+}
+
+impl CfgErr {
+	pub fn to_ir (self) -> IrErrData {
+		self.into()
+	}
 }
 
 pub type CfgResult<T = ()> = Result<T, CfgErr>;

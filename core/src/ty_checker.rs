@@ -16,23 +16,6 @@ use super::{
 
 
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TyCkErr {
-	TyErr(TyErr),
-	IrErr(IrErr),
-}
-
-impl From<TyErr> for TyCkErr {
-	fn from (e: TyErr) -> TyCkErr { TyCkErr::TyErr(e) }
-}
-
-impl From<IrErr> for TyCkErr {
-	fn from (e: IrErr) -> TyCkErr { TyCkErr::IrErr(e) }
-}
-
-pub type TyCkResult<T = ()> = Result<T, TyCkErr>;
-
 #[derive(Debug, Default)]
 pub struct OpStack {
 	entries: Stack<(TyKey, Option<Constant>)>
@@ -55,7 +38,7 @@ impl OpStack {
 		self.entries.push((ty.as_key(), Some(c)))
 	}
 
-	fn pop (&mut self) -> TyCkResult<TyKey> {
+	fn pop (&mut self) -> IrDataResult<TyKey> {
 		Ok(
 			self.entries
 				.pop()
@@ -64,7 +47,7 @@ impl OpStack {
 		)
 	}
 
-	// fn pop_constant (&mut self) -> TyCkResult<(TyKey, Constant)> {
+	// fn pop_constant (&mut self) -> IrDataResult<(TyKey, Constant)> {
 	// 	Ok(
 	// 		self.entries
 	// 			.pop()
@@ -77,7 +60,7 @@ impl OpStack {
 	// 	)
 	// }
 
-	fn peek_at (&mut self, at: usize) -> TyCkResult<TyKey> {
+	fn peek_at (&mut self, at: usize) -> IrDataResult<TyKey> {
 		Ok(
 			self.entries
 				.peek_at(at)
@@ -86,7 +69,7 @@ impl OpStack {
 		)
 	}
 
-	fn peek_constant_at (&mut self, at: usize) -> TyCkResult<(TyKey, &Constant)> {
+	fn peek_constant_at (&mut self, at: usize) -> IrDataResult<(TyKey, &Constant)> {
 		Ok(
 			self.entries
 				.peek_at(at)
@@ -111,7 +94,7 @@ impl OpStack {
 			.is_some()
 	}
 
-	fn duplicate (&mut self) -> TyCkResult {
+	fn duplicate (&mut self) -> IrDataResult {
 		if self.entries.duplicate() {
 			Ok(())
 		} else {
@@ -158,23 +141,23 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 
 
-	pub fn get_block<K: AsKey<BlockKey>> (&self, block_key: K) -> TyCkResult<Keyed<'f, Block>> {
+	pub fn get_block<K: AsKey<BlockKey>> (&self, block_key: K) -> IrDataResult<Keyed<'f, Block>> {
 		let block_key = block_key.as_key();
-		let block = self.function.block_data.get_keyed(block_key).ok_or(IrErr::InvalidBlockKey(block_key))?;
+		let block = self.function.block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key))?;
 
 		Ok(block)
 	}
 
-	pub fn get_param<K: AsKey<ParamKey>> (&self, param_key: K) -> TyCkResult<Keyed<'f, Param>> {
+	pub fn get_param<K: AsKey<ParamKey>> (&self, param_key: K) -> IrDataResult<Keyed<'f, Param>> {
 		let param_key = param_key.as_key();
-		let param = self.function.param_data.get_keyed(param_key).ok_or(IrErr::InvalidParamKey(param_key))?;
+		let param = self.function.param_data.get_keyed(param_key).ok_or(IrErrData::InvalidParamKey(param_key))?;
 
 		Ok(param)
 	}
 
-	pub fn get_local<K: AsKey<LocalKey>> (&self, local_key: K) -> TyCkResult<Keyed<'f, Local>> {
+	pub fn get_local<K: AsKey<LocalKey>> (&self, local_key: K) -> IrDataResult<Keyed<'f, Local>> {
 		let local_key = local_key.as_key();
-		let local = self.function.locals.get_keyed(local_key).ok_or(IrErr::InvalidLocalKey(local_key))?;
+		let local = self.function.locals.get_keyed(local_key).ok_or(IrErrData::InvalidLocalKey(local_key))?;
 
 		Ok(local)
 	}
@@ -220,7 +203,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		Ok(())
 	}
 
-	pub fn extract_pointer_target (&self, ty: Keyed<Ty>) -> TyCkResult<TyKey> {
+	pub fn extract_pointer_target (&self, ty: Keyed<Ty>) -> IrDataResult<TyKey> {
 		if let TyData::Pointer { target_ty } = &ty.data  {
 			Ok(self.builder.get_finalized_ty(target_ty)?.as_key())
 		} else {
@@ -229,7 +212,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 	}
 
 
-	pub fn check_bin_op<'x> (&'x self, op: BinaryOp, ty: Keyed<'x, Ty>) -> TyCkResult<Keyed<'x, Ty>> {
+	pub fn check_bin_op<'x> (&'x self, op: BinaryOp, ty: Keyed<'x, Ty>) -> IrDataResult<Keyed<'x, Ty>> {
 		let ty_key = ty.as_key();
 
 		let invalid_operand_err = TyErr::BinaryOpInvalidOperandTy(op, ty_key);
@@ -271,7 +254,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		})
 	}
 
-	pub fn check_un_op<'x> (&'x self, op: UnaryOp, ty: Keyed<'x, Ty>) -> TyCkResult<Keyed<'x, Ty>> {
+	pub fn check_un_op<'x> (&'x self, op: UnaryOp, ty: Keyed<'x, Ty>) -> IrDataResult<Keyed<'x, Ty>> {
 		let ty_key = ty.as_key();
 
 		let invalid_operand_err = TyErr::UnaryOpInvalidOperandTy(op, ty_key);
@@ -301,7 +284,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		})
 	}
 
-	pub fn check_cast_op (&self, op: CastOp, curr_ty: Keyed<Ty>, new_ty: Keyed<Ty>) -> TyCkResult {
+	pub fn check_cast_op (&self, op: CastOp, curr_ty: Keyed<Ty>, new_ty: Keyed<Ty>) -> IrDataResult {
 		let curr_ty_key = curr_ty.as_key();
 		let new_ty_key = new_ty.as_key();
 
@@ -352,7 +335,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 
 
-	pub fn get_constant_ty (&self, constant: &Constant) -> TyCkResult<Keyed<Ty>> {
+	pub fn get_constant_ty (&self, constant: &Constant) -> IrDataResult<Keyed<Ty>> {
 		use Constant::*;
 
 		Ok(match constant {
@@ -492,7 +475,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		})
 	}
 
-	pub fn check_node (&mut self, parent: Keyed<Block>, node: &Ir) -> TyCkResult {
+	pub fn check_node (&mut self, parent: Keyed<Block>, node: &Ir) -> IrDataResult {
 		use IrData::*;
 
 		match &node.data {
@@ -842,19 +825,19 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		assert!(self.cfg.set_out_values(block_key, out_values).unwrap().is_empty());
 	}
 
-	pub fn check_ir (&mut self, block_key: BlockKey) -> TyCkResult {
+	pub fn check_ir (&mut self, block_key: BlockKey) -> FunctionResult {
 		// let block_key = block_key.as_key();
-		let block = self.function.block_data.get_keyed(block_key).ok_or(IrErr::InvalidBlockKey(block_key))?;
+		let block = self.function.block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key)).at(FunctionErrLocation::Root)?;
 
-		for node in block.ir.iter() {
-			self.check_node(block, node)?;
+		for (i, node) in block.ir.iter().enumerate() {
+			self.check_node(block, node).at(FunctionErrLocation::Node(block_key, i))?;
 		}
 
 		Ok(())
 	}
 
 
-	pub fn check_edge_values (&mut self, block_key: BlockKey) -> TyCkResult {
+	pub fn check_edge_values (&mut self, block_key: BlockKey) -> FunctionResult {
 		let x = {
 			self.cfg
 				.get_predecessors(block_key)
@@ -872,11 +855,11 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				let out_val = {
 					self.cfg
 						.get_out_values(pred)
-						.map_err(|_| TyErr::PhiMissingInPredecessor)
+						.map_err(|_| TyErr::PhiMissingInPredecessor(pred))
 						.and_then(|out_values| {
 							let top = out_values.len();
 
-							if top <= i { return Err(TyErr::PhiMissingInPredecessor) }
+							if top <= i { return Err(TyErr::PhiMissingInPredecessor(pred)) }
 
 							let j = top - (i + 1);
 
@@ -886,10 +869,15 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 									.copied()
 									.unwrap()
 							)
-						})?
+						})
+						.at(FunctionErrLocation::Node(block_key, i))?
 				};
 
-				assert(self.ty_eq(in_val, out_val), TyErr::ExpectedTy(in_val, out_val))?;
+				assert(
+					self.ty_eq(in_val, out_val),
+					IrErrData::from(TyErr::ExpectedTy(in_val, out_val))
+						.at(FunctionErrLocation::Node(block_key, i))
+				)?;
 			}
 		}
 
@@ -897,7 +885,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 	}
 
 
-	pub fn check_function (&mut self) -> TyCkResult {
+	pub fn check_function (&mut self) -> FunctionResult {
 		for &block_ref in self.function.block_order.iter() {
 			self.check_ir(block_ref)?;
 		}
@@ -913,10 +901,32 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 
 
-pub fn check (builder: &mut Builder<'_>, cfg: Cfg, function: &Function) -> TyCkResult<Cfg> {
+pub fn check (builder: &mut Builder<'_>, cfg: Cfg, function_key: FunctionKey) -> IrResult<Cfg> {
+	// SAFETY:
+	// MIRI may not like this but it is safe;
+
+	// whats going on here is that the ty checker needs mutable access to builder,
+	// and it needs access to the function.
+	// Its really not possible to just pass the function_key down and take references where needed,
+	// because the process here is deeply recursive while traversing the function's parts, and at any depth it
+	// can perform a mutation in the type system
+
+	// This is be safe because the `functions` slotmap field of the builder's context is never mutated during typechecking
+
+	// The following simply gets a reference to the function without borrowing the builder
+	let function = unsafe {
+		&*(
+			builder
+				.get_function(function_key)
+				.unwrap()
+				.into_ref()
+			as *const _
+		)
+	};
+
 	let mut state = TyChecker::new(builder, cfg, function);
 
-	state.check_function()?;
+	state.check_function().at(function_key)?;
 
 	Ok(state.cfg)
 }

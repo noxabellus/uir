@@ -486,6 +486,10 @@ impl<'s, K: Key, V: Keyable<Key = K>> SlotmapCollapsePredictor<'s, K, V> {
 		self.base.get(k)
 	}
 
+	pub fn get_value_keyed (&self, k: K) -> Option<Keyed<'_, V>> {
+		self.base.get_keyed(k)
+	}
+
 	pub fn get_value_by_index (&self, idx: usize) -> Option<&V> {
 		self.get_value(self.get_key(idx)?)
 	}
