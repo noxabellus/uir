@@ -101,7 +101,6 @@ mod test {
 		with_block!(f, use_n => {
 			f.param_ref(n);
 			f.load();
-			f.discard();
 			f.branch(end);
 		});
 

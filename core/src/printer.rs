@@ -1115,10 +1115,6 @@ impl<'data, 'ctx> fmt::Display for BlockPrinter<'data, 'ctx> {
 				}
 			}
 
-			for node in self.0.ir.iter() {
-				writeln!(f, "\t\t\t{}", self.child(node))?;
-			}
-
 			write!(f, "\t\t")?;
 		} else {
 			write!(f, " ()")?;
