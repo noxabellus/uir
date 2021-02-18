@@ -9,6 +9,8 @@ use support::{
 	slotmap::{ Keyed, AsKey },
 };
 
+use crate::{cfg::CfgErr, ty::TyErr};
+
 use super::{
 	builder::{
 		IrErr,
@@ -114,8 +116,6 @@ impl fmt::Display for CastOp {
 		match self {
 			CastOp::IntToReal => write!(f, "int_to_real"),
 			CastOp::RealToInt => write!(f, "real_to_int"),
-			CastOp::SIntToUInt => write!(f, "sint_to_uint"),
-			CastOp::UIntToSInt => write!(f, "uint_to_sint"),
 			CastOp::ZeroExtend => write!(f, "zero_extend"),
 			CastOp::SignExtend => write!(f, "sign_extend"),
 			CastOp::Truncate => write!(f, "truncate"),
@@ -355,8 +355,8 @@ macro_rules! impl_dprinter {
 
 
 impl_dprinter! {
-	u8, u16, u32, u64, u128,
-	i8, i16, i32, i64, i128,
+	u8, u16, u32, u64, u128, usize,
+	i8, i16, i32, i64, i128, isize,
 	f32, f64,
 	str,
 }
@@ -996,6 +996,7 @@ impl<'data, 'ctx> fmt::Display for IrDataPrinter<'data, 'ctx> {
 
 			IrData::Duplicate => { write!(f, "duplicate") }
 			IrData::Discard => { write!(f, "discard") }
+			IrData::Swap => { write!(f, "swap") }
 
 			IrData::Unreachable => { write!(f, "unreachable") }
 		}
@@ -1044,20 +1045,20 @@ impl<'data, 'ctx> Printable<'data, 'ctx> for &'data Ir {
 
 
 
-pub struct ErrorPrinter<'data, 'ctx> (Option<&'data IrErrData>, &'ctx PrinterState<'ctx>);
-impl<'data, 'ctx> Printer<'data, 'ctx> for ErrorPrinter<'data, 'ctx> {
+pub struct PossibleErrorPrinter<'data, 'ctx> (Option<&'data IrErrData>, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for PossibleErrorPrinter<'data, 'ctx> {
 	type Data = Option<&'data IrErrData>;
 
 	fn data (&self) -> Option<&'data IrErrData> { self.0 }
 	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
 }
 
-impl<'data, 'ctx> fmt::Display for ErrorPrinter<'data, 'ctx> {
+impl<'data, 'ctx> fmt::Display for PossibleErrorPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "^ Error")?;
 
 		if let Some(err_data) = self.data() {
-			write!(f, ": {:?}", err_data)?;
+			write!(f, ": {}", self.child(err_data))?;
 		}
 
 		Ok(())
@@ -1065,10 +1066,125 @@ impl<'data, 'ctx> fmt::Display for ErrorPrinter<'data, 'ctx> {
 }
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for Option<&'data IrErrData> {
-	type Printer = ErrorPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ErrorPrinter(self, state) }
+	type Printer = PossibleErrorPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { PossibleErrorPrinter(self, state) }
 }
 
+
+
+
+pub struct IrErrorPrinter<'data, 'ctx> (&'data IrErrData, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for IrErrorPrinter<'data, 'ctx> {
+	type Data = &'data IrErrData;
+
+	fn data (&self) -> &'data IrErrData { self.0 }
+	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for IrErrorPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self.data() {
+			IrErrData::InvalidParamKey(param_key) => { write!(f, "Invalid param key {}", self.child(param_key)) }
+			IrErrData::InvalidParamIndex(param_idx) => { write!(f, "Invalid param index {}", param_idx) }
+			IrErrData::InvalidLocalKey(local_key) => { write!(f, "Invalid local key {}", self.child(local_key)) }
+			IrErrData::InvalidBlockKey(block_key) => { write!(f, "Invalid block key {}", self.child(block_key)) }
+			IrErrData::InvalidBlockIndex(block_idx) => { write!(f, "Invalid block index {}", block_idx) }
+			IrErrData::InvalidTyKey(ty_key) => { write!(f, "Invalid type key {}", self.child(ty_key)) }
+			IrErrData::InvalidGlobalKey(global_key) => { write!(f, "Invalid global key {}", self.child(global_key)) }
+			IrErrData::InvalidFunctionKey(function_key) => { write!(f, "Invalid function key {}", self.child(function_key)) }
+			IrErrData::InvalidNodeIndex(node_idx) => { write!(f, "Invalid node index {}", node_idx) }
+			IrErrData::CfgErr(cfg_err) => { write!(f, "{}", self.child(cfg_err)) }
+			IrErrData::TyErr(ty_err) => { write!(f, "{}", self.child(ty_err)) }
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for &'data IrErrData {
+	type Printer = IrErrorPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { IrErrorPrinter(self, state) }
+}
+
+
+pub struct CfgErrorPrinter<'data, 'ctx> (&'data CfgErr, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for CfgErrorPrinter<'data, 'ctx> {
+	type Data = &'data CfgErr;
+
+	fn data (&self) -> &'data CfgErr { self.0 }
+	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for CfgErrorPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self.data() {
+			CfgErr::ExistingOutEdge(from, to) => { write!(f, "Duplicate out edge from {} to {}", self.child(from), self.child(to)) }
+			CfgErr::ExistingInEdge(from, to) => { write!(f, "Duplicate in edge from {} to {}", self.child(from), self.child(to)) }
+			CfgErr::InvalidEdge(from, to) => { write!(f, "Invalid edge from {} to {}", self.child(from), self.child(to)) }
+			CfgErr::MissingOutEdge(block_key) => { write!(f, "Missing edge to {}", self.child(block_key)) }
+			CfgErr::MissingInEdge(block_key) => { write!(f, "Missing edge from {}", self.child(block_key)) }
+
+			CfgErr::PhiNotAtTop => { write!(f, "Phi nodes must be placed before other instruction types")}
+			CfgErr::NodeAfterTerminator => { write!(f, "Cannot have instructions following a terminator node") }
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for &'data CfgErr {
+	type Printer = CfgErrorPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { CfgErrorPrinter(self, state) }
+}
+
+
+
+
+pub struct TyErrorPrinter<'data, 'ctx> (&'data TyErr, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for TyErrorPrinter<'data, 'ctx> {
+	type Data = &'data TyErr;
+
+	fn data (&self) -> &'data TyErr { self.0 }
+	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for TyErrorPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self.data() {
+			TyErr::StackUnderflow => { write!(f, "Stack underflow") }
+			TyErr::ExpectedConstant => { write!(f, "Expected a constant value") }
+			TyErr::GepNoIndices => { write!(f, "Gep instruction has no indices") }
+			TyErr::PhiMissingInPredecessor(block_key) => { write!(f, "Phi node has no corresponding value in predecessor {}", self.child(block_key)) }
+			TyErr::PhiTypeMismatch(block_key, expected_ty, found_ty) => { write!(f, "Phi node has type {} but the value in predecessor {} has type {}", self.child(expected_ty), self.child(block_key), self.child(found_ty)) }
+			TyErr::PhiNoPredecessors(block_key) => { write!(f, "Phi node in block {} with no predecessors", self.child(block_key)) }
+			TyErr::UnusedValues(block_key, num_unused) => { write!(f, "Block {} has {} value(s) remaining on the stack with no corresponding phi nodes in successors", self.child(block_key), num_unused) }
+			TyErr::UnusedValuesNoSuccessor(block_key, num_unused) => { write!(f, "Block {} has {} value(s) remaining on the stack with no successors", self.child(block_key), num_unused) }
+			TyErr::GepTargetNotPointer(ty_key) => { write!(f, "Target of gep instruction is not of pointer type but {}", self.child(ty_key)) }
+			TyErr::GepInvalidSubElement(elem_idx, ty_key) => { write!(f, "Subtarget of gep instruction at element {} is not an aggregate but {}", elem_idx, self.child(ty_key)) }
+			TyErr::GepImplicitLoad(elem_idx, ty_key) => { write!(f, "Subtarget of gep instruction at element {} requires an implicit load because it is of pointer type {}", elem_idx, self.child(ty_key)) }
+			TyErr::GepInvalidIndex(elem_idx, ty_key) => { write!(f, "Gep instruction element {} index is not an integer but {}", elem_idx, self.child(ty_key)) }
+			TyErr::GepOutOfBounds(elem_idx, ty_key, len, idx) => { write!(f, "Gep instruction element {} constant index {} is out of bounds 0 <-> {} for subtarget type {}", elem_idx, idx, len, self.child(ty_key)) }
+			TyErr::ExpectedTy(expected_ty, found_ty) => { write!(f, "Expected type {}, but found {}", self.child(expected_ty), self.child(found_ty)) }
+			TyErr::ExpectedArray(ty_key) => { write!(f, "Value is not an array but {}", self.child(ty_key)) }
+			TyErr::ExpectedStructure(ty_key) => { write!(f, "Value is not a struct but {}", self.child(ty_key)) }
+			TyErr::ExpectedFunction(ty_key) => { write!(f, "Value is not a function but {}", self.child(ty_key)) }
+			TyErr::ExpectedBlock(ty_key) => { write!(f, "Value is not a block reference but {}", self.child(ty_key)) }
+			TyErr::ExpectedPointer(ty_key) => { write!(f, "Value is not a pointer but {}", self.child(ty_key)) }
+			TyErr::ExpectedAggregateTy(ty_key) => { write!(f, "Value is not an aggregate but {}", self.child(ty_key)) }
+			TyErr::ExpectedInteger(ty_key) => { write!(f, "Value is not an integer but {}", self.child(ty_key)) }
+			TyErr::InvalidSwitchTy(ty_key) => { write!(f, "Values of type {} cannot be switched on", self.child(ty_key)) }
+			TyErr::DuplicateAggregateIndex(loc_a, loc_b, idx) => { write!(f, "Aggregate initialization contains multiple entries for the same index {}, at {} and {}", idx, loc_a, loc_b) }
+			TyErr::InvalidAggregateIndex(ty_key, idx) => { write!(f, "Aggregate of type {} has no index {}", self.child(ty_key), idx) }
+			TyErr::MissingAggregateElement(ty_key, idx) => { write!(f, "Aggregate initialization of type {} is missing element for index {}", self.child(ty_key), idx) }
+			TyErr::ExpectedAggregateElementTy(ty_key, idx, expected_ty, found_ty) => { write!(f, "Aggregate initialization of type {} has invalid type for index {}: expected {}, but found {}", self.child(ty_key), idx, self.child(expected_ty), self.child(found_ty)) }
+			TyErr::BinaryOpTypeMismatch(left_ty, right_ty) => { write!(f, "Binary operator has mismatched operand types: left is {}, but right is {}", self.child(left_ty), self.child(right_ty)) }
+			TyErr::BinaryOpInvalidOperandTy(op, operand_ty) => { write!(f, "Binary operator {} has no meaning for operand ty {}", op, self.child(operand_ty)) }
+			TyErr::UnaryOpInvalidOperandTy(op, operand_ty) => { write!(f, "Unary operator {} has no meaning for operand ty {}", op, self.child(operand_ty)) }
+			TyErr::InvalidCast(op, from_ty, to_ty) => { write!(f, "Cannot perform cast {} from {} to {}", op, self.child(from_ty), self.child(to_ty)) }
+		}
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for &'data TyErr {
+	type Printer = TyErrorPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyErrorPrinter(self, state) }
+}
 
 
 

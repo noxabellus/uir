@@ -178,7 +178,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		} {
 			Ok(())
 		} else {
-			Err(TyErr::InvalidAggregateIndex(idx))
+			Err(TyErr::InvalidAggregateIndex(ty.as_key(), idx))
 		}
 	}
 
@@ -187,14 +187,14 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 		match &ty.data {
 			&TyData::Array { length, element_ty } => {
-				assert(idx < length, TyErr::InvalidAggregateIndex(idx))?;
-				assert(self.ty_eq(element_ty, ty_key), TyErr::ExpectedAggregateElementTy(idx, element_ty, ty_key))?;
+				assert(idx < length, TyErr::InvalidAggregateIndex(ty.as_key(), idx))?;
+				assert(self.ty_eq(element_ty, ty_key), TyErr::ExpectedAggregateElementTy(ty.as_key(), idx, element_ty, ty_key))?;
 			}
 
 
 			TyData::Structure { field_tys } => {
-				let field_ty = *field_tys.get(idx as usize).ok_or(TyErr::InvalidAggregateIndex(idx))?;
-				assert(self.ty_eq(field_ty, ty_key), TyErr::ExpectedAggregateElementTy(idx, field_ty, ty_key))?;
+				let field_ty = *field_tys.get(idx as usize).ok_or_else(|| TyErr::InvalidAggregateIndex(ty.as_key(), idx))?;
+				assert(self.ty_eq(field_ty, ty_key), TyErr::ExpectedAggregateElementTy(ty.as_key(), idx, field_ty, ty_key))?;
 			}
 
 			_ => return Err(TyErr::ExpectedAggregateTy(ty.as_key())),
@@ -299,15 +299,6 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			=> curr_ty.is_real()
 			&& new_ty.is_int(),
 
-			SIntToUInt
-			=> curr_ty.is_sint()
-			&& new_ty.is_uint()
-			&& self.builder.size_of(new_ty)? == self.builder.size_of(curr_ty)?,
-
-			UIntToSInt
-			=> curr_ty.is_uint()
-			&& new_ty.is_sint()
-			&& self.builder.size_of(new_ty)? == self.builder.size_of(curr_ty)?,
 
 			ZeroExtend
 			=> curr_ty.is_int()
@@ -344,7 +335,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				let ty = self.builder.get_finalized_ty(ty_key)?;
 
 				if !ty.is_pointer() {
-					return Err(TyErr::InvalidNull(ty.as_key()).into())
+					return Err(TyErr::ExpectedPointer(ty.as_key()).into())
 				}
 
 				ty
@@ -405,7 +396,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 						let operand_ty = self.get_constant_ty(operand)?;
 
 						if let TyData::Array { element_ty, .. } = ty.data {
-							assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(0, element_ty, operand_ty.as_key()))?;
+							assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, 0, element_ty, operand_ty.as_key()))?;
 						} else {
 							return Err(TyErr::ExpectedArray(ty.as_key()).into())
 						}
@@ -419,7 +410,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 									let operand = elements.get(i as usize).ok_or(TyErr::MissingAggregateElement(*ty_key, i))?;
 									let operand_ty = self.get_constant_ty(operand)?;
 
-									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty.as_key()))?;
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i, element_ty, operand_ty.as_key()))?;
 								}
 							},
 
@@ -428,7 +419,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 									let operand = elements.get(i).ok_or(TyErr::MissingAggregateElement(*ty_key, i as u64))?;
 									let operand_ty = self.get_constant_ty(operand)?;
 
-									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty.as_key()))?;
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as u64, field_ty, operand_ty.as_key()))?;
 								}
 							}
 
@@ -448,20 +439,20 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 						match &ty.data {
 							&TyData::Array { length, element_ty } => {
 								for &(i, ref operand) in indexed_elements.iter() {
-									assert(i < length, TyErr::InvalidAggregateIndex(i))?;
+									assert(i < length, TyErr::InvalidAggregateIndex(*ty_key, i))?;
 
 									let operand_ty = self.get_constant_ty(operand)?;
 
-									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty.as_key()))?;
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i, element_ty, operand_ty.as_key()))?;
 								}
 							},
 
 							TyData::Structure { field_tys } => {
 								for &(i, ref operand) in indexed_elements.iter() {
-									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(i))?;
+									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(*ty_key, i))?;
 									let operand_ty = self.get_constant_ty(operand)?;
 
-									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty.as_key()))?;
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as u64, field_ty, operand_ty.as_key()))?;
 								}
 							}
 
@@ -500,7 +491,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 						let operand_ty = self.stack.pop()?;
 
 						if let TyData::Array { element_ty, .. } = ty.data {
-							assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(0, element_ty, operand_ty.as_key()))?;
+							assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, 0, element_ty, operand_ty.as_key()))?;
 						} else {
 							return Err(TyErr::ExpectedArray(ty.as_key()).into())
 						}
@@ -513,7 +504,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 								for i in 0..length {
 									let operand_ty = self.stack.pop()?;
 
-									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty))?;
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i, element_ty, operand_ty))?;
 								}
 							},
 
@@ -521,7 +512,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 								for (i, &field_ty) in field_tys.iter().enumerate() {
 									let operand_ty = self.stack.pop()?;
 
-									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty))?;
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as u64, field_ty, operand_ty))?;
 								}
 							}
 
@@ -541,20 +532,20 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 						match &ty.data {
 							&TyData::Array { length, element_ty } => {
 								for &i in indices.iter() {
-									assert(i < length, TyErr::InvalidAggregateIndex(i))?;
+									assert(i < length, TyErr::InvalidAggregateIndex(*ty_key, i))?;
 
 									let operand_ty = self.stack.pop()?;
 
-									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i, element_ty, operand_ty))?;
+									assert(self.ty_eq(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i, element_ty, operand_ty))?;
 								}
 							},
 
 							TyData::Structure { field_tys } => {
 								for &i in indices.iter() {
-									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(i))?;
+									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(*ty_key, i))?;
 									let operand_ty = self.stack.pop()?;
 
-									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(i as u64, field_ty, operand_ty))?;
+									assert(self.ty_eq(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as u64, field_ty, operand_ty))?;
 								}
 							}
 
@@ -649,7 +640,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				assert(target.is_pointer(), TyErr::GepTargetNotPointer(target.as_key()))?;
 
 				let ptr_index = self.builder.get_ty(self.stack.peek_at(peek_base - 1)?)?;
-				assert(ptr_index.is_int(), TyErr::GepInvalidIndex(ptr_index.as_key()))?;
+				assert(ptr_index.is_int(), TyErr::GepInvalidIndex(0, ptr_index.as_key()))?;
 
 
 				let mut target = self.builder.get_ty(self.extract_pointer_target(target)?)?;
@@ -664,11 +655,11 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 								let index = constant.as_index().ok_or(TyErr::ExpectedInteger(ty))?;
 
-								assert(index <= *length, TyErr::GepOutOfBounds(target.as_key(), *length, index))?
+								assert(index <= *length, TyErr::GepOutOfBounds(n, target.as_key(), *length, index))?
 							} else {
 								let index = self.builder.get_ty(self.stack.pop()?)?;
 
-								assert(index.is_int(), TyErr::GepInvalidIndex(index.as_key()))?;
+								assert(index.is_int(), TyErr::GepInvalidIndex(n, index.as_key()))?;
 							}
 
 							target = self.builder.get_finalized_ty(element_ty)?
@@ -679,14 +670,14 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 							let index = constant.as_index().ok_or(TyErr::ExpectedInteger(ty))?;
 
-							let field_ty = field_tys.get(index as usize).ok_or_else(|| TyErr::GepOutOfBounds(target.as_key(), field_tys.len() as u64, index))?;
+							let field_ty = field_tys.get(index as usize).ok_or_else(|| TyErr::GepOutOfBounds(n, target.as_key(), field_tys.len() as u64, index))?;
 
 							target = self.builder.get_finalized_ty(field_ty)?
 						}
 
-						TyData::Pointer { .. } => return Err(TyErr::GepImplicitLoad(target.as_key()).into()),
+						TyData::Pointer { .. } => return Err(TyErr::GepImplicitLoad(n, target.as_key()).into()),
 
-						_ => return Err(TyErr::GepInvalidSubElement(target.as_key()).into())
+						_ => return Err(TyErr::GepInvalidSubElement(n, target.as_key()).into())
 					}
 				}
 
@@ -796,7 +787,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 					assert(self.ty_eq(expected, result), TyErr::ExpectedTy(expected.as_key(), result.as_key()))?;
 				}
 
-				assert(self.stack.is_empty(), TyErr::UnusedValues(parent.as_key(), self.stack.len()))?
+				assert(self.stack.is_empty(), TyErr::UnusedValuesNoSuccessor(parent.as_key(), self.stack.len()))?
 			}
 
 
@@ -808,6 +799,14 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			Discard
 			=> {
 				self.stack.pop()?;
+			}
+
+			Swap
+			=> {
+				let a = self.stack.pop()?;
+				let b = self.stack.pop()?;
+				self.stack.push(a);
+				self.stack.push(b);
 			}
 
 			Unreachable
@@ -837,18 +836,16 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 	}
 
 
-	pub fn check_edge_values (&mut self, block_key: BlockKey) -> FunctionResult {
-		let x = {
-			self.cfg
-				.get_predecessors(block_key)
-				.and_then(|preds|
-					self.cfg
-						.get_in_values(block_key)
-						.map(|in_values| (preds, in_values))
-				)
+	pub fn check_in_edge_values (&mut self, block_key: BlockKey) -> FunctionResult {
+		let in_values = match self.cfg.get_in_values(block_key) {
+			Ok(x) if !x.is_empty() => x,
+			_ => return Ok(())
 		};
 
-		let (preds, in_values) = if let Ok(x) = x { x } else { return Ok(()) };
+		let preds = match self.cfg.get_predecessors(block_key) {
+			Ok(x) if !x.is_empty() => x,
+			_ => return Err(TyErr::PhiNoPredecessors(block_key).at(FunctionErrLocation::Node(block_key, 0)))
+		};
 
 		for (i, &in_val) in in_values.iter().enumerate() {
 			for &pred in preds.iter() {
@@ -875,7 +872,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 				assert(
 					self.ty_eq(in_val, out_val),
-					IrErrData::from(TyErr::ExpectedTy(in_val, out_val))
+					IrErrData::from(TyErr::PhiTypeMismatch(pred, in_val, out_val))
 						.at(FunctionErrLocation::Node(block_key, i))
 				)?;
 			}
@@ -884,14 +881,50 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		Ok(())
 	}
 
+	pub fn check_out_edge_values (&mut self, block_key: BlockKey) -> FunctionResult {
+		dbg!("wtf mate");
 
-	pub fn check_function (&mut self) -> FunctionResult {
-		for &block_ref in self.function.block_order.iter() {
-			self.check_ir(block_ref)?;
+		let out_values = match self.cfg.get_out_values(block_key) {
+			Ok(x) if !x.is_empty() => x,
+			_ => return Ok(())
+		};
+
+		dbg!("u w0t");
+
+		let succs = match self.cfg.get_successors(block_key) {
+			Ok(x) if !x.is_empty() => x,
+			_ => return Err(
+				TyErr::UnusedValuesNoSuccessor(block_key, out_values.len())
+					.at(FunctionErrLocation::Block(block_key))
+			)
+		};
+
+		dbg!(succs.len());
+
+
+		for &succ in succs.iter() {
+			self.cfg
+				.get_in_values(succ)
+				.map_err(|_| TyErr::UnusedValues(block_key, out_values.len()))
+				.and_then(|in_values| {
+					if in_values.len() < out_values.len() { Err(TyErr::UnusedValues(block_key, out_values.len() - in_values.len())) }
+					else { Ok(()) }
+				})
+				.at(FunctionErrLocation::Block(block_key))?;
 		}
 
-		for &block_ref in self.function.block_order.iter() {
-			self.check_edge_values(block_ref)?;
+		Ok(())
+	}
+
+
+	pub fn check_function (&mut self) -> FunctionResult {
+		for &block_key in self.function.block_order.iter() {
+			self.check_ir(block_key)?;
+		}
+
+		for &block_key in self.function.block_order.iter() {
+			self.check_in_edge_values(block_key)?;
+			self.check_out_edge_values(block_key)?;
 		}
 
 		Ok(())

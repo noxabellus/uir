@@ -40,7 +40,6 @@ pub enum IrErrData {
 	InvalidNodeIndex(usize),
 	CfgErr(CfgErr),
 	TyErr(TyErr),
-	FunctionAlreadyDefined(FunctionKey),
 }
 
 impl From<CfgErr> for IrErrData {
@@ -1583,6 +1582,10 @@ impl<'b> FunctionBuilder<'b> {
 
 	pub fn discard (&mut self) -> IrManipulator {
 		self.write_node(IrData::Discard)
+	}
+
+	pub fn swap (&mut self) -> IrManipulator {
+		self.write_node(IrData::Swap)
 	}
 
 

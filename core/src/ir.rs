@@ -56,8 +56,6 @@ pub enum UnaryOp {
 pub enum CastOp {
 	IntToReal,
 	RealToInt,
-	SIntToUInt,
-	UIntToSInt,
 	ZeroExtend,
 	SignExtend,
 	Truncate,
@@ -153,6 +151,7 @@ pub enum IrData {
 
 	Duplicate,
 	Discard,
+	Swap,
 
 	Unreachable,
 }
