@@ -1,4 +1,4 @@
-use std::{cell::RefCell, ops};
+use std::{ fmt, cell::RefCell, ops };
 
 use super::{
 	src::SrcAttribution,
@@ -54,6 +54,33 @@ pub enum PrimitiveTy {
 	Real32, Real64,
 }
 
+impl PrimitiveTy {
+	pub fn as_str (&self) -> &'static str {
+		match self {
+			PrimitiveTy::Bool => "bool",
+			PrimitiveTy::SInt8 => "sint8",
+			PrimitiveTy::SInt16 => "sint16",
+			PrimitiveTy::SInt32 => "sint32",
+			PrimitiveTy::SInt64 => "sint64",
+			PrimitiveTy::SInt128 => "sint128",
+			PrimitiveTy::UInt8 => "uint8",
+			PrimitiveTy::UInt16 => "uint16",
+			PrimitiveTy::UInt32 => "uint32",
+			PrimitiveTy::UInt64 => "uint64",
+			PrimitiveTy::UInt128 => "uint128",
+			PrimitiveTy::Real32 => "real32",
+			PrimitiveTy::Real64 => "real64",
+		}
+	}
+}
+
+impl fmt::Display for PrimitiveTy {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", self.as_str())
+	}
+}
+
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum TyData {
 	Void,
@@ -106,6 +133,14 @@ pub enum TyMeta {
 	User(String)
 }
 
+impl fmt::Display for TyMeta {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			TyMeta::User(str) => write!(f, "{}", str.escape_debug())
+		}
+	}
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Layout {
 	pub size: u64,
@@ -148,5 +183,26 @@ impl Ty {
 		&& (other.meta.is_empty()  || other.meta   == self.meta  )
 		&& (other.src.is_none()    || other.src    == self.src   )
 		&& (other.layout.borrow().is_none() || other.layout == self.layout)
+	}
+
+	pub fn get_pure_intrinsic_name (&self) -> Option<&'static str> {
+		let name = Some(match &self.data {
+			TyData::Primitive(prim) => prim.as_str(),
+			TyData::Void => "void",
+			TyData::Block => "block",
+			_ => return None
+		});
+
+		if self.src.is_none()
+		&& self.meta.is_empty()
+		&& (self.name.is_none() || self.name.as_deref() == name) {
+			name
+		} else {
+			None
+		}
+	}
+
+	pub fn is_pure_intrinsic (&self) -> bool {
+		self.get_pure_intrinsic_name().is_some()
 	}
 }

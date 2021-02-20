@@ -1,7 +1,7 @@
 use std::{cell::{Ref, RefCell}, fmt, hint::unreachable_unchecked};
 
-use fmt::Display;
-use support::utils::index_of;
+use fmt::{Display, Formatter, Write};
+use support::{slotmap::{Key, Keyable, SlotmapCollapsePredictor}, utils::index_of};
 
 
 use support::{
@@ -9,7 +9,7 @@ use support::{
 	slotmap::{ Keyed, AsKey },
 };
 
-use crate::{cfg::CfgErr, ty::TyErr};
+use crate::{cfg::CfgErr, ir::MetaCollapsePredictor, ty::TyErr};
 
 use super::{
 	builder::{
@@ -37,17 +37,24 @@ use super::{
 		ConstantAggregateData,
 		GlobalMetaKey,
 		Block,
-		ContextCollpasePredictor,
+		ContextCollapsePredictor,
 		FunctionMetaKey,
 		Constant,
 		CastOp,
 		Function,
+		Global,
 		IrData,
 		UnaryOp,
+		FunctionMeta,
+		GlobalMeta,
+		ParamMeta,
+		LocalMeta,
+		IrMeta,
 	},
 	ty::{
 		TyKey,
 		TyMetaKey,
+		TyMeta,
 		PrimitiveTy,
 		TyData,
 		Ty
@@ -55,83 +62,15 @@ use super::{
 };
 
 
-impl fmt::Display for PrimitiveTy {
-	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			PrimitiveTy::Bool => write!(f, "bool"),
-			PrimitiveTy::SInt8 => write!(f, "sint8"),
-			PrimitiveTy::SInt16 => write!(f, "sint16"),
-			PrimitiveTy::SInt32 => write!(f, "sint32"),
-			PrimitiveTy::SInt64 => write!(f, "sint64"),
-			PrimitiveTy::SInt128 => write!(f, "sint128"),
-			PrimitiveTy::UInt8 => write!(f, "uint8"),
-			PrimitiveTy::UInt16 => write!(f, "uint16"),
-			PrimitiveTy::UInt32 => write!(f, "uint32"),
-			PrimitiveTy::UInt64 => write!(f, "uint64"),
-			PrimitiveTy::UInt128 => write!(f, "uint128"),
-			PrimitiveTy::Real32 => write!(f, "real32"),
-			PrimitiveTy::Real64 => write!(f, "real64"),
-		}
-	}
-}
-
-impl fmt::Display for BinaryOp {
-	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			BinaryOp::Add => write!(f, "add"),
-			BinaryOp::Sub => write!(f, "sub"),
-			BinaryOp::Mul => write!(f, "mul"),
-			BinaryOp::Div => write!(f, "div"),
-			BinaryOp::Rem => write!(f, "rem"),
-			BinaryOp::Eq => write!(f, "eq"),
-			BinaryOp::Ne => write!(f, "ne"),
-			BinaryOp::Lt => write!(f, "lt"),
-			BinaryOp::Gt => write!(f, "gt"),
-			BinaryOp::Le => write!(f, "le"),
-			BinaryOp::Ge => write!(f, "ge"),
-			BinaryOp::LAnd => write!(f, "land"),
-			BinaryOp::LOr => write!(f, "lor"),
-			BinaryOp::BAnd => write!(f, "band"),
-			BinaryOp::BOr => write!(f, "bor"),
-			BinaryOp::BXor => write!(f, "bxor"),
-			BinaryOp::LSh => write!(f, "lsh"),
-			BinaryOp::RShA => write!(f, "rsha"),
-			BinaryOp::RShL => write!(f, "rshl"),
-		}
-	}
-}
-
-impl fmt::Display for UnaryOp {
-	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			UnaryOp::Neg => write!(f, "neg"),
-			UnaryOp::LNot => write!(f, "lnot"),
-			UnaryOp::BNot => write!(f, "bnot"),
-		}
-	}
-}
-
-impl fmt::Display for CastOp {
-	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			CastOp::IntToReal => write!(f, "int_to_real"),
-			CastOp::RealToInt => write!(f, "real_to_int"),
-			CastOp::ZeroExtend => write!(f, "zero_extend"),
-			CastOp::SignExtend => write!(f, "sign_extend"),
-			CastOp::Truncate => write!(f, "truncate"),
-			CastOp::Bitcast => write!(f, "bitcast"),
-		}
-	}
-}
-
 
 
 #[derive(Debug)]
 pub struct PrinterState<'ctx> {
-	ctx: ContextCollpasePredictor<'ctx>,
+	ctx: ContextCollapsePredictor<'ctx>,
 	function: RefCell<Option<FunctionCollapsePredictor<'ctx>>>,
 	err_data: Option<IrErrData>,
 	err_location: IrErrLocation,
+	indent: RefCell<usize>,
 }
 
 impl<'ctx> PrinterState<'ctx> {
@@ -141,6 +80,7 @@ impl<'ctx> PrinterState<'ctx> {
 			function: RefCell::new(None),
 			err_data: None,
 			err_location: IrErrLocation::None,
+			indent: RefCell::new(0)
 		}
 	}
 
@@ -188,8 +128,40 @@ impl<'ctx> PrinterState<'ctx> {
 		self.err_location = IrErrLocation::None;
 	}
 
+	pub fn print_global (&'ctx self, global: GlobalKey) -> GlobalPrinter<'ctx, 'ctx> {
+		self.ctx.globals.get_value_keyed(global).unwrap().printer(self)
+	}
+
 	pub fn print_function (&'ctx self, function: FunctionKey) -> FunctionPrinter<'ctx, 'ctx> {
 		self.ctx.functions.get_value_keyed(function).unwrap().printer(self)
+	}
+
+	pub fn print_ty (&'ctx self, ty: TyKey) -> TyPrinter<'ctx, 'ctx> {
+		self.ctx.tys.get_value_keyed(ty).unwrap().printer(self)
+	}
+
+	pub fn print_self (&'ctx self) -> ContextPrinter<'ctx, 'ctx> {
+		self.ctx.printer(self)
+	}
+
+	pub fn indent (&self) -> Indent {
+		Indent(*self.indent.borrow())
+	}
+
+	pub fn incr_indent (&self) {
+		*self.indent.borrow_mut() += 1;
+	}
+
+	pub fn decr_indent (&self) {
+		*self.indent.borrow_mut() -= 1;
+	}
+}
+
+pub struct Indent(usize);
+impl fmt::Display for Indent {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		for _ in 0..self.0 { f.write_char('\t')?; }
+		Ok(())
 	}
 }
 
@@ -199,7 +171,11 @@ pub trait Printer<'data, 'ctx>: Display {
 
 	fn data (&self) -> Self::Data;
 	fn state (&self) -> &'ctx PrinterState<'ctx>;
-	fn ctx (&self) -> &'ctx ContextCollpasePredictor<'ctx> { &self.state().ctx }
+	fn ctx (&self) -> &'ctx ContextCollapsePredictor<'ctx> { &self.state().ctx }
+
+	fn indent (&self) -> Indent { self.state().indent() }
+	fn incr_indent (&self) { self.state().incr_indent() }
+	fn decr_indent (&self) { self.state().decr_indent() }
 
 	fn set_function (&self, function_key: FunctionKey) {
 		let fpred = self.ctx().function_predictor(function_key).unwrap();
@@ -265,13 +241,20 @@ impl<'data, 'ctx, P: 'data> fmt::Display for ListPrinter<'data, 'ctx, P>
 where &'data P: Printable<'data, 'ctx>
 {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		for (i, e) in self.0.iter().enumerate() {
-			self.child(e).fmt(f)?;
+		if !self.0.is_empty() {
+			writeln!(f)?;
+			self.incr_indent();
 
-			if i < self.0.len() - 1 {
-				write!(f, " ")?;
+			for e in self.0.iter() {
+				writeln!(f, "{}{}", self.indent(), self.child(e))?;
 			}
+
+			self.decr_indent();
+			write!(f, "{}", self.indent())?;
+		} else {
+			write!(f, "()")?;
 		}
+
 		Ok(())
 	}
 }
@@ -307,14 +290,14 @@ where
 	&'data V: Printable<'data, 'ctx>,
 {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		for (i, (k, v)) in self.0.iter().enumerate() {
-			self.child(k).fmt(f)?;
-			self.child(v).fmt(f)?;
+		self.incr_indent();
 
-			if i < self.0.len() - 1 {
-				write!(f, " ")?;
-			}
+		for (k, v) in self.0.iter() {
+			writeln!(f, "{}({} {})", self.indent(), self.child(k), self.child(v))?;
 		}
+
+		self.decr_indent();
+
 		Ok(())
 	}
 }
@@ -385,7 +368,7 @@ where
 	&'data V: Printable<'data, 'ctx>,
 {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		let (k,v) = self.0;
+		let (k, v) = self.0;
 		write!(f, "({} {})", self.child(k), self.child(v))
 	}
 }
@@ -406,7 +389,18 @@ impl<'data, 'ctx> Printer<'data, 'ctx> for TyKeyPrinter<'data, 'ctx> {
 impl<'data, 'ctx> fmt::Display for TyKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		if let Some(ty) = self.ctx().tys.get_value(*self.0) {
-			write!(f, "(ty {})", self.child(ty))
+			if let Some(intrinsic) = ty.get_pure_intrinsic_name() {
+				return write!(f, "(ty {})", intrinsic)
+			}
+
+			if let Some(name) = ty.name.as_ref() {
+				write!(f, "(ty \"{}\")", name)
+			} else if let Some(idx) = self.ctx().tys.get_index(*self.0) {
+				write!(f, "(ty {})", idx)
+			} else {
+				// SAFETY: if we can get the value we can get the index
+				unsafe { unreachable_unchecked() }
+			}
 		} else {
 			write!(f, "(ty (INVALID {:?}))", self.0)
 		}
@@ -791,57 +785,80 @@ impl<'data, 'ctx> Printable<'data, 'ctx> for &'data GlobalMetaKey {
 
 
 
-pub struct TyPrinter<'data, 'ctx> (&'data Ty, &'ctx PrinterState<'ctx>);
+pub struct TyPrinter<'data, 'ctx> (Keyed<'data, Ty>, &'ctx PrinterState<'ctx>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for TyPrinter<'data, 'ctx> {
-	type Data = &'data Ty;
+	type Data = Keyed<'data, Ty>;
 
-	fn data (&self) -> &'data Ty { self.0 }
+	fn data (&self) -> Keyed<'data, Ty> { self.0 }
 	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
 }
 
 impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if let Some(name) = self.0.name.as_ref() {
-			return write!(f, "{}", name)
+		write!(f, "(ty")?;
+
+		write!(f, " :id {}", self.ctx().tys.get_index(self.0.as_key()).unwrap())?;
+
+		if let Some(intrinsic) = self.0.get_pure_intrinsic_name() {
+			return write!(f, " ({}))", intrinsic)
 		}
 
-		match &self.0.data {
-			TyData::Void => { write!(f, "void") }
-			TyData::Block => { write!(f, "block") }
-			TyData::Primitive(primitive_ty) => { write!(f, "{}", primitive_ty) }
-			TyData::Pointer { target_ty } => { write!(f, "*{}", self.child(target_ty)) }
-			TyData::Array { length, element_ty } => { write!(f, "[{}]{}", length, self.child(element_ty)) }
-
-			TyData::Structure { field_tys } => {
-				write!(f, "struct {{ {} }}", self.list(field_tys.as_slice()))
-			}
-
-			TyData::Function { parameter_tys, result_ty } => {
-				write!(f, "({})", self.list(parameter_tys.as_slice()))?;
-
-				write!(f, " -> ")?;
-
-				if let Some(result_ty) = result_ty {
-					self.child(result_ty).fmt(f)
-				} else {
-					write!(f, "()")
-				}
-			}
-		}?;
+		if let Some(name) = self.0.name.as_ref() {
+			write!(f, " :name \"{}\"", name)?;
+		}
 
 		if let Some(src_attr) = self.0.src.as_ref() {
 			write!(f, " {}", self.child(src_attr))?;
 		}
 
-		for meta_key in self.0.meta.iter() {
-			write!(f, " {}", self.child(meta_key))?;
+		for meta in self.0.meta.iter() {
+			write!(f, " :#{}", self.child(meta))?;
 		}
 
-		Ok(())
+		writeln!(f)?;
+		self.incr_indent();
+
+		match &self.0.data {
+			TyData::Void => { writeln!(f, "{}(void)", self.indent()) }
+			TyData::Block => { writeln!(f, "{}(block)", self.indent()) }
+			TyData::Primitive(primitive_ty) => { writeln!(f, "{}({})", self.indent(), primitive_ty) }
+			TyData::Pointer { target_ty } => { writeln!(f, "{}(pointer {})", self.indent(), self.child(target_ty)) }
+			TyData::Array { length, element_ty } => { writeln!(f, "{}(array {} {})", self.indent(), length, self.child(element_ty)) }
+
+			TyData::Structure { field_tys } => {
+				writeln!(f, "{}(struct {})", self.indent(), self.list(field_tys.as_slice()))
+			}
+
+			TyData::Function { parameter_tys, result_ty } => {
+				writeln!(f, "{}(function", self.indent())?;
+				self.incr_indent();
+
+
+				writeln!(f, "{}(params {})", self.indent(), self.list(parameter_tys.as_slice()))?;
+
+
+				write!(f, "{}(result ", self.indent())?;
+
+				if let Some(result_ty) = result_ty {
+					self.child(result_ty).fmt(f)?;
+				} else {
+					write!(f, "(")?;
+				}
+
+				writeln!(f, ")")?;
+
+
+				self.decr_indent();
+				writeln!(f, "{})", self.indent())
+			}
+		}?;
+
+		self.decr_indent();
+		write!(f, "{})", self.indent())
 	}
 }
 
-impl<'data, 'ctx> Printable<'data, 'ctx> for &'data Ty {
+impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Ty> {
 	type Printer = TyPrinter<'data, 'ctx>;
 	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyPrinter(self, state) }
 }
@@ -1084,6 +1101,7 @@ impl<'data, 'ctx> Printer<'data, 'ctx> for IrErrorPrinter<'data, 'ctx> {
 impl<'data, 'ctx> fmt::Display for IrErrorPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self.data() {
+			IrErrData::EmptyBlock(block_key) => { write!(f, "Block {} contains no instructions", self.child(block_key)) }
 			IrErrData::InvalidParamKey(param_key) => { write!(f, "Invalid param key {}", self.child(param_key)) }
 			IrErrData::InvalidParamIndex(param_idx) => { write!(f, "Invalid param index {}", param_idx) }
 			IrErrData::InvalidLocalKey(local_key) => { write!(f, "Invalid local key {}", self.child(local_key)) }
@@ -1136,15 +1154,15 @@ impl<'data, 'ctx> Printable<'data, 'ctx> for &'data CfgErr {
 
 
 
-pub struct TyErrorPrinter<'data, 'ctx> (&'data TyErr, &'ctx PrinterState<'ctx>);
-impl<'data, 'ctx> Printer<'data, 'ctx> for TyErrorPrinter<'data, 'ctx> {
+pub struct TyErrPrinter<'data, 'ctx> (&'data TyErr, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for TyErrPrinter<'data, 'ctx> {
 	type Data = &'data TyErr;
 
 	fn data (&self) -> &'data TyErr { self.0 }
 	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
 }
 
-impl<'data, 'ctx> fmt::Display for TyErrorPrinter<'data, 'ctx> {
+impl<'data, 'ctx> fmt::Display for TyErrPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self.data() {
 			TyErr::StackUnderflow => { write!(f, "Stack underflow") }
@@ -1182,8 +1200,8 @@ impl<'data, 'ctx> fmt::Display for TyErrorPrinter<'data, 'ctx> {
 }
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data TyErr {
-	type Printer = TyErrorPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyErrorPrinter(self, state) }
+	type Printer = TyErrPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyErrPrinter(self, state) }
 }
 
 
@@ -1209,6 +1227,7 @@ impl<'data, 'ctx> fmt::Display for BlockPrinter<'data, 'ctx> {
 
 		if !self.0.ir.is_empty() {
 			writeln!(f)?;
+			self.incr_indent();
 
 			match self.state().err_location {
 				IrErrLocation::Function(err_function_key, FunctionErrLocation::Node(err_block_key, err_node_idx))
@@ -1216,22 +1235,23 @@ impl<'data, 'ctx> fmt::Display for BlockPrinter<'data, 'ctx> {
 				&& err_block_key == self.data().as_key()
 				=> {
 					for (i, node) in self.0.ir.iter().enumerate() {
-						writeln!(f, "\t\t\t{}", self.child(node))?;
+						writeln!(f, "{}{}", self.indent(), self.child(node))?;
 
 						if i == err_node_idx {
-							writeln!(f, "\t\t\t{}", self.child(self.state().err_data.as_ref()))?;
+							writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data.as_ref()))?;
 						}
 					}
 				}
 
 				_ => {
 					for node in self.0.ir.iter() {
-						writeln!(f, "\t\t\t{}", self.child(node))?;
+						writeln!(f, "{}{}", self.indent(), self.child(node))?;
 					}
 				}
 			}
 
-			write!(f, "\t\t")?;
+			self.decr_indent();
+			write!(f, "{}", self.indent())?;
 		} else {
 			write!(f, " ()")?;
 		}
@@ -1262,11 +1282,10 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 
 		write!(f, "(function")?;
 
+		write!(f, " :id {}", self.get_function().own_index)?;
 
 		if let Some(name) = self.0.name.as_ref() {
 			write!(f, " :name \"{}\"", name)?;
-		} else {
-			write!(f, " :id {}", self.get_function().own_index)?;
 		}
 
 		if let Some(src) = self.0.src.as_ref() {
@@ -1277,41 +1296,48 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 			write!(f, " {}", self.child(meta_key))?;
 		}
 
+		writeln!(f)?;
+		self.incr_indent();
 
-		write!(f, "\n\t(params (")?;
 
-		for (i, &param_key) in self.0.param_order.iter().enumerate() {
-			let param = self.0.param_data.get(param_key).unwrap();
+		if !self.0.param_order.is_empty() {
+			writeln!(f, "{}(params", self.indent())?;
+			self.incr_indent();
 
-			if param.name.is_some() || param.src.is_some() || !param.meta.is_empty() {
-				write!(f, "({}", self.child(&param.ty))?;
+			for (i, &param_key) in self.0.param_order.iter().enumerate() {
+				let param = self.0.param_data.get(param_key).unwrap();
 
-				if let Some(name) = param.name.as_ref() {
-					write!(f, " :name \"{}\"", name)?;
+				if param.name.is_some() || param.src.is_some() || !param.meta.is_empty() {
+					write!(f, "{}({}", self.indent(), self.child(&param.ty))?;
+
+					if let Some(name) = param.name.as_ref() {
+						write!(f, " :name \"{}\"", name)?;
+					}
+
+					if let Some(src_attr) = self.0.src.as_ref() {
+						write!(f, " {}", self.child(src_attr))?;
+					}
+
+					for meta_key in self.0.meta.iter() {
+						write!(f, " {}", self.child(meta_key))?;
+					}
+
+					writeln!(f, ")")?;
+				} else {
+					self.child(&param.ty).fmt(f)?;
 				}
 
-				if let Some(src_attr) = self.0.src.as_ref() {
-					write!(f, " {}", self.child(src_attr))?;
+				if i < self.0.param_order.len() - 1 {
+					write!(f, " ")?;
 				}
-
-				for meta_key in self.0.meta.iter() {
-					write!(f, " {}", self.child(meta_key))?;
-				}
-
-				write!(f, ")")?;
-			} else {
-				self.child(&param.ty).fmt(f)?;
 			}
 
-			if i < self.0.param_order.len() - 1 {
-				write!(f, " ")?;
-			}
+			self.decr_indent();
+			writeln!(f, "{})", self.indent())?;
 		}
 
-		write!(f, "))")?;
 
-
-		write!(f, "\n\t(result ")?;
+		write!(f, "{}(result ", self.indent())?;
 
 		if let Some(result) = self.0.result.as_ref() {
 			self.child(result).fmt(f)?;
@@ -1319,44 +1345,50 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 			write!(f, "()")?;
 		}
 
-		write!(f, ")")?;
+		writeln!(f, ")")?;
 
 
-		write!(f, "\n\t(locals (")?;
 
-		for (i, &local_key) in self.0.locals.keys().enumerate() {
-			let local = self.0.locals.get(local_key).unwrap();
+		if !self.0.locals.is_empty() {
+			writeln!(f, "{}(locals", self.indent())?;
+			self.incr_indent();
 
-			if local.name.is_some() || local.src.is_some() || !local.meta.is_empty() {
-				write!(f, "({}", self.child(&local.ty))?;
+			for (i, &local_key) in self.0.locals.keys().enumerate() {
+				let local = self.0.locals.get(local_key).unwrap();
 
-				if let Some(name) = local.name.as_ref() {
-					write!(f, " :name \"{}\"", name)?;
+				if local.name.is_some() || local.src.is_some() || !local.meta.is_empty() {
+					write!(f, "{}({}", self.indent(), self.child(&local.ty))?;
+
+					if let Some(name) = local.name.as_ref() {
+						write!(f, " :name \"{}\"", name)?;
+					}
+
+					if let Some(src_attr) = self.0.src.as_ref() {
+						write!(f, " {}", self.child(src_attr))?;
+					}
+
+					for meta_key in self.0.meta.iter() {
+						write!(f, " {}", self.child(meta_key))?;
+					}
+
+					write!(f, ")")?;
+				} else {
+					self.child(&local.ty).fmt(f)?;
 				}
 
-				if let Some(src_attr) = self.0.src.as_ref() {
-					write!(f, " {}", self.child(src_attr))?;
+				if i < self.0.locals.len() - 1 {
+					write!(f, " ")?;
 				}
-
-				for meta_key in self.0.meta.iter() {
-					write!(f, " {}", self.child(meta_key))?;
-				}
-
-				write!(f, ")")?;
-			} else {
-				self.child(&local.ty).fmt(f)?;
 			}
 
-			if i < self.0.locals.len() - 1 {
-				write!(f, " ")?;
-			}
+			self.decr_indent();
+			writeln!(f, "{})", self.indent())?;
 		}
-
-		write!(f, "))")?;
 
 
 		if !self.0.block_order.is_empty() {
-			writeln!(f, "\n\t(body")?;
+			writeln!(f, "{}(body", self.indent())?;
+			self.incr_indent();
 
 			for &block_key in self.0.block_order.iter() {
 				let block = self.0.block_data.get_keyed(block_key).unwrap();
@@ -1375,16 +1407,19 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 				}
 			}
 
-			writeln!(f, "\t)")?;
+			self.decr_indent();
+			writeln!(f, "{})", self.indent())?;
 		}
 
-		writeln!(f, ")")?;
+
+		self.decr_indent();
+		writeln!(f, "{})", self.indent())?;
 
 		match self.state().err_location {
 			IrErrLocation::Function(err_function_key, FunctionErrLocation::Root)
 			if err_function_key == self.data().as_key()
 			=> {
-				writeln!(f, "{}", self.child(self.state().err_data.as_ref()))?;
+				writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data.as_ref()))?;
 			}
 
 			_ => { }
@@ -1400,4 +1435,191 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Function> {
 	type Printer = FunctionPrinter<'data, 'ctx>;
 	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { FunctionPrinter(self, state) }
+}
+
+
+
+
+
+pub struct GlobalPrinter<'data, 'ctx> (Keyed<'data, Global>, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for GlobalPrinter<'data, 'ctx> {
+	type Data = Keyed<'data, Global>;
+
+	fn data (&self) -> Keyed<'data, Global> { self.0 }
+	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for GlobalPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "(global")?;
+
+		write!(f, " :id {}", self.ctx().globals.get_index(self.0.as_key()).unwrap())?;
+
+		if let Some(name) = self.0.name.as_ref() {
+			write!(f, " :name \"{}\"", name)?;
+		}
+
+		if let Some(src) = self.0.src.as_ref() {
+			write!(f, " {}", self.child(src))?;
+		}
+
+		for meta_key in self.0.meta.iter() {
+			write!(f, " {}", self.child(meta_key))?;
+		}
+
+
+		write!(f, " (init ")?;
+
+		if let Some(init) = self.0.init.as_ref() {
+			write!(f, "{}", self.child(init))?;
+		} else {
+			write!(f, "()")?;
+		}
+
+		write!(f, "))")?;
+
+
+		Ok(())
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Global> {
+	type Printer = GlobalPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { GlobalPrinter(self, state) }
+}
+
+
+
+macro_rules! meta_printers {
+	($($tyname:ident($field:ident)),+ $(,)?) => { $(
+		support::paste! {
+			pub struct [<$tyname Printer>]<'data, 'ctx> (Keyed<'data, $tyname>, &'ctx PrinterState<'ctx>);
+			impl<'data, 'ctx> Printer<'data, 'ctx> for [<$tyname Printer>]<'data, 'ctx> {
+				type Data = Keyed<'data, $tyname>;
+
+				fn data (&self) -> Keyed<'data, $tyname> { self.0 }
+				fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+			}
+
+			impl<'data, 'ctx> fmt::Display for [<$tyname Printer>]<'data, 'ctx> {
+				fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+					writeln!(f, "{}(:#{} {})", self.indent(), self.ctx().meta.$field.get_index(self.0.as_key()).unwrap(), self.0.into_ref())
+				}
+			}
+
+			impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, $tyname> {
+				type Printer = [<$tyname Printer>]<'data, 'ctx>;
+				fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { [<$tyname Printer>](self, state) }
+			}
+		}
+	)+ };
+}
+
+meta_printers! {
+	TyMeta(ty),
+	FunctionMeta(function),
+	GlobalMeta(global),
+	ParamMeta(param),
+	LocalMeta(local),
+	IrMeta(ir),
+}
+
+
+
+pub struct SlotmapPrinter<'data, 'ctx, K: 'data + Key, V: 'data + Keyable<Key = K>> (&'data SlotmapCollapsePredictor<'data, K, V>, &'ctx PrinterState<'ctx>)
+where
+	Keyed<'data, V>: Printable<'data,'ctx>,
+;
+
+impl<'data, 'ctx, K: 'data + Key, V: 'data + Keyable<Key = K>> Printer<'data, 'ctx> for SlotmapPrinter<'data, 'ctx, K, V>
+where
+	Keyed<'data, V>: Printable<'data,'ctx>,
+{
+	type Data = &'data SlotmapCollapsePredictor<'data, K, V>;
+
+	fn data (&self) -> Self::Data { self.0 }
+	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx, K: 'data + Key, V: 'data + Keyable<Key = K>> fmt::Display for SlotmapPrinter<'data, 'ctx, K, V>
+where
+	Keyed<'data, V>: Printable<'data,'ctx>,
+{
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		if !self.0.is_empty() {
+			writeln!(f)?;
+			self.incr_indent();
+
+			for &key in self.0.iter() {
+				writeln!(f, "{}{}", self.indent(), self.child(self.0.get_value_keyed(key).unwrap()))?;
+			}
+
+			self.decr_indent();
+			write!(f, "{}", self.indent())?;
+		} else {
+			write!(f, "()")?;
+		}
+
+		Ok(())
+	}
+}
+
+
+
+
+
+
+pub struct MetaPrinter<'data, 'ctx> (&'data MetaCollapsePredictor<'data>, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for MetaPrinter<'data, 'ctx> {
+	type Data = &'data MetaCollapsePredictor<'data>;
+
+	fn data (&self) -> &'data MetaCollapsePredictor<'data> { self.0 }
+	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for MetaPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		writeln!(f, "(meta ")?;
+
+		self.incr_indent();
+
+		if !self.0.ty.is_empty() { writeln!(f, "{}(ty {})", self.indent(), SlotmapPrinter(&self.0.ty, self.state()))?; }
+		if !self.0.function.is_empty() { writeln!(f, "{}(function {})", self.indent(), SlotmapPrinter(&self.0.function, self.state()))?; }
+		if !self.0.param.is_empty() { writeln!(f, "{}(param {})", self.indent(), SlotmapPrinter(&self.0.param, self.state()))?; }
+		if !self.0.local.is_empty() { writeln!(f, "{}(local {})", self.indent(), SlotmapPrinter(&self.0.local, self.state()))?; }
+		if !self.0.global.is_empty() { writeln!(f, "{}(global {})", self.indent(), SlotmapPrinter(&self.0.global, self.state()))?; }
+		if !self.0.ir.is_empty() { writeln!(f, "{}(ir {})", self.indent(), SlotmapPrinter(&self.0.ir, self.state()))?; }
+
+		self.decr_indent();
+		write!(f, "{})", self.indent())
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for &'data MetaCollapsePredictor<'data> {
+	type Printer = MetaPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { MetaPrinter(self, state) }
+}
+
+
+pub struct ContextPrinter<'data, 'ctx> (&'data ContextCollapsePredictor<'data>, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx> Printer<'data, 'ctx> for ContextPrinter<'data, 'ctx> {
+	type Data = &'data ContextCollapsePredictor<'data>;
+
+	fn data (&self) -> &'data ContextCollapsePredictor<'data> { self.0 }
+	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+}
+
+impl<'data, 'ctx> fmt::Display for ContextPrinter<'data, 'ctx> {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		if !self.0.tys.is_empty() { writeln!(f, "{}(types {})", self.indent(), SlotmapPrinter(&self.0.tys, self.state()))?; }
+		if !self.0.globals.is_empty() { writeln!(f, "{}(globals {})", self.indent(), SlotmapPrinter(&self.0.globals, self.state()))?; }
+		if !self.0.functions.is_empty() { writeln!(f, "{}(functions {})", self.indent(), SlotmapPrinter(&self.0.functions, self.state()))?; }
+		if !self.0.meta.is_empty() { writeln!(f, "{}{}", self.indent(), self.child(&self.0.meta))?; }
+		Ok(())
+	}
+}
+
+impl<'data, 'ctx> Printable<'data, 'ctx> for &'data ContextCollapsePredictor<'data> {
+	type Printer = ContextPrinter<'data, 'ctx>;
+	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ContextPrinter(self, state) }
 }

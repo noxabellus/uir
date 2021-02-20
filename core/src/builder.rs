@@ -29,6 +29,7 @@ pub enum IrErrLocation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IrErrData {
+	EmptyBlock(BlockKey),
 	InvalidParamKey(ParamKey),
 	InvalidParamIndex(usize),
 	InvalidLocalKey(LocalKey),
@@ -403,16 +404,6 @@ impl<'a> GlobalManipulator<'a> {
 		self
 	}
 
-	pub fn set_init (mut self, constant: Constant) -> Self {
-		self.init = Some(constant);
-		self
-	}
-
-	pub fn set_ty<K: AsKey<TyKey>> (mut self, ty: K) -> Self {
-		self.ty = ty.as_key();
-		self
-	}
-
 	pub fn set_src (mut self, src_attribution: SrcAttribution) -> Self {
 		self.src = Some(src_attribution);
 		self
@@ -436,6 +427,66 @@ impl<'a> GlobalManipulator<'a> {
 		self.0.into_mut()
 	}
 }
+
+
+
+pub struct FunctionManipulator<'a> (KeyedMut<'a, Function>);
+
+impl<'a> ops::Deref for FunctionManipulator<'a> {
+	type Target = KeyedMut<'a, Function>;
+	fn deref (&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<'a> ops::DerefMut for FunctionManipulator<'a> {
+	fn deref_mut	(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl<'a> AsRef<Function> for FunctionManipulator<'a> {
+	fn as_ref (&self) -> &Function { self.value }
+}
+
+impl<'a> AsMut<Function> for FunctionManipulator<'a> {
+	fn as_mut (&mut self) -> &mut Function { self.value }
+}
+
+impl<'a> AsKey<FunctionKey> for FunctionManipulator<'a> {
+	fn as_key(&self) -> FunctionKey { self.0.as_key() }
+}
+
+impl<'a> FunctionManipulator<'a> {
+	pub fn set_name (mut self, name: &str) -> Self {
+		self.name = Some(name.to_owned());
+		self
+	}
+
+	pub fn set_src (mut self, src_attribution: SrcAttribution) -> Self {
+		self.src = Some(src_attribution);
+		self
+	}
+
+	pub fn clear_src (mut self) -> Self {
+		self.src = None;
+		self
+	}
+
+	pub fn add_meta (mut self, meta_key: FunctionMetaKey) -> Self {
+		self.meta.push(meta_key);
+		self
+	}
+
+	pub fn into_ref (self) -> &'a Function {
+		self.0.into_ref()
+	}
+
+	pub fn into_mut (self) -> &'a mut Function {
+		self.0.into_mut()
+	}
+}
+
 
 
 pub struct TyManipulator<'a> (KeyedMut<'a, Ty>);
@@ -716,10 +767,10 @@ impl<'c> Builder<'c> {
 		self.ctx.functions.get_keyed(function_key).ok_or(IrErrData::InvalidFunctionKey(function_key))
 	}
 
-	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrDataResult<KeyedMut<Function>> {
+	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrDataResult<FunctionManipulator> {
 		let function_key = function_key.as_key();
 
-		self.ctx.functions.get_keyed_mut(function_key).ok_or(IrErrData::InvalidFunctionKey(function_key))
+		self.ctx.functions.get_keyed_mut(function_key).ok_or(IrErrData::InvalidFunctionKey(function_key)).map(FunctionManipulator)
 	}
 
 
@@ -798,6 +849,84 @@ impl<'c> Builder<'c> {
 			Err(TyErr::ExpectedStructure(ty_key.as_key()).into())
 		}
 	}
+
+
+
+	pub fn create_function (&mut self) -> FunctionBuilder<'_> {
+		// SAFETY:
+		// This mutably borrows self, and all the things produced by this borrow it, so theres no harm here
+		FunctionBuilder::new(unsafe { std::mem::transmute::<&'_ mut Builder<'c>, &'_ mut Builder<'_>>(self) })
+	}
+
+
+	pub fn create_global (&mut self, ty: TyKey, init: Option<Constant>) -> (GlobalManipulator, IrResult) {
+		let g = self.ctx.globals.insert(Global {
+			ty,
+			init,
+			.. Global::default()
+		}).as_key();
+
+		let result = ty_checker::check_global(self, g);
+
+		(self.get_global_mut(g).unwrap(), result)
+	}
+
+
+	/// Warning: This is a very expensive function, it probably isnt necessary to call this under normal circumstances
+	pub fn validate_tys (&mut self) -> IrResult {
+		for &ty_key in self.ctx.tys.keys() {
+			self.get_finalized_ty(ty_key).at(IrErrLocation::Ty(ty_key))?;
+		}
+
+		Ok(())
+	}
+
+	/// Warning: This is a fairly expensive function, it should only be used if you have manually created globals,
+	/// or modified the type or initializer of Globals after creation
+	pub fn validate_globals (&mut self) -> IrResult {
+		// SAFETY:
+		// this is safe because the type checker doesnt mutate globals
+		let globals = unsafe {
+			std::mem::transmute::<std::slice::Iter<'_, _>, std::slice::Iter<'static, _>>(self.ctx.globals.keys())
+		};
+
+		for &global_key in globals {
+			ty_checker::check_global(self, global_key)?;
+		}
+
+		Ok(())
+	}
+
+	/// Warning: This is a very expensive function, it should only be used if you have manually created functions,
+	/// or modified functions after FunctionBuilder finalization
+	pub fn validate_functions (&mut self) -> IrResult {
+		// SAFETY:
+		// this is safe because the type checker doesnt mutate functions
+		let functions = unsafe {
+			std::mem::transmute::<std::slice::Iter<'_, _>, std::slice::Iter<'static, _>>(self.ctx.functions.keys())
+		};
+
+		for &function_key in functions {
+			let cfg = cfg_generator::generate(self, function_key)?;
+			let cfg = ty_checker::check_function(self, cfg, function_key)?;
+
+			let mut function = self.get_function_mut(function_key).unwrap();
+
+			function.cfg = cfg;
+		}
+
+		Ok(())
+	}
+
+
+	/// Warning: This is an intensely expensive function, it should only be called if you're absolutely certain you need it
+	///
+	/// See `validate_tys`, `validate_globals`, and `validate_functions` for more details on the use case
+	pub fn validate_all (&mut self) -> IrResult {
+		self.validate_tys()?;
+		self.validate_globals()?;
+		self.validate_functions()
+	}
 }
 
 
@@ -844,15 +973,23 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
+	pub fn create_child_function (&mut self) -> FunctionBuilder<'_> {
+		// SAFETY:
+		// This mutably borrows self, and all the things produced by this borrow it, so theres no harm here
+		FunctionBuilder::new(unsafe { std::mem::transmute::<&'_ mut Builder<'b>, &'_ mut Builder<'_>>(self.builder) })
+	}
 
-	pub fn finalize (mut self) -> (Keyed<'b, Function>, IrResult) {
+
+
+
+	pub fn finalize (mut self) -> (FunctionManipulator<'b>, IrResult) {
 		self.clear_active_block();
 
 		let function_key = self.function_key;
 
 		if let Err(e) = self.generate_own_ty() {
 			return (
-				self.builder.ctx.functions.define(function_key, self.function).unwrap().into_keyed(),
+				FunctionManipulator(self.builder.ctx.functions.define(function_key, self.function).unwrap()),
 				Err(e.at(FunctionErrLocation::Root.at(function_key)))
 			)
 		}
@@ -869,19 +1006,19 @@ impl<'b> FunctionBuilder<'b> {
 
 		match cfg_generator::generate(builder, function_key) {
 			Ok(cfg) => {
-				match ty_checker::check(builder, cfg, function_key) {
+				match ty_checker::check_function(builder, cfg, function_key) {
 					Ok(cfg) => {
 						let mut function = builder.get_function_mut(function_key).unwrap();
 
 						function.cfg = cfg;
 
-						return (function.into_keyed(), Ok(()))
+						(function, Ok(()))
 					}
 
-					Err(e) => return (builder.get_function(function_key).unwrap(), Err(e))
-				};
+					Err(e) => (builder.get_function_mut(function_key).unwrap(), Err(e))
+				}
 			},
-			Err(e) => return (builder.get_function(function_key).unwrap(), Err(e))
+			Err(e) => (builder.get_function_mut(function_key).unwrap(), Err(e))
 		}
 	}
 
@@ -986,11 +1123,11 @@ impl<'b> FunctionBuilder<'b> {
 		self.builder.get_function(function_key)
 	}
 
-	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrDataResult<KeyedMut<Function>> {
+	pub fn get_function_mut<K: AsKey<FunctionKey>> (&mut self, function_key: K) -> IrDataResult<FunctionManipulator> {
 		let function_key = function_key.as_key();
 
 		if function_key == self.function_key {
-			return Ok(KeyedMut { key: function_key, value: &mut self.function })
+			return Ok(FunctionManipulator(KeyedMut { key: function_key, value: &mut self.function }))
 		}
 
 		self.builder.get_function_mut(function_key)

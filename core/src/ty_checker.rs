@@ -120,21 +120,33 @@ impl OpStack {
 }
 
 
+
+
 #[derive(Debug)]
 pub struct TyChecker<'r, 'b, 'f> {
 	pub builder: &'r mut Builder<'b>,
 	pub cfg: Cfg,
-	pub function: &'f Function,
+	pub function: Option<&'f Function>,
 	pub stack: OpStack,
 }
 
 
 impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
-	pub fn new (builder: &'r mut Builder<'b>, cfg: Cfg, function: &'f Function) -> Self {
+	pub fn for_function (builder: &'r mut Builder<'b>, cfg: Cfg, function: &'f Function) -> Self {
 		Self {
 			builder,
 			cfg,
-			function,
+			function: Some(function),
+			stack: OpStack::default()
+		}
+	}
+
+
+	pub fn for_global (builder: &'r mut Builder<'b>) -> Self {
+		Self {
+			builder,
+			cfg: Cfg::default(),
+			function: None,
 			stack: OpStack::default()
 		}
 	}
@@ -143,21 +155,21 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 	pub fn get_block<K: AsKey<BlockKey>> (&self, block_key: K) -> IrDataResult<Keyed<'f, Block>> {
 		let block_key = block_key.as_key();
-		let block = self.function.block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key))?;
+		let block = self.function.unwrap().block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key))?;
 
 		Ok(block)
 	}
 
 	pub fn get_param<K: AsKey<ParamKey>> (&self, param_key: K) -> IrDataResult<Keyed<'f, Param>> {
 		let param_key = param_key.as_key();
-		let param = self.function.param_data.get_keyed(param_key).ok_or(IrErrData::InvalidParamKey(param_key))?;
+		let param = self.function.unwrap().param_data.get_keyed(param_key).ok_or(IrErrData::InvalidParamKey(param_key))?;
 
 		Ok(param)
 	}
 
 	pub fn get_local<K: AsKey<LocalKey>> (&self, local_key: K) -> IrDataResult<Keyed<'f, Local>> {
 		let local_key = local_key.as_key();
-		let local = self.function.locals.get_keyed(local_key).ok_or(IrErrData::InvalidLocalKey(local_key))?;
+		let local = self.function.unwrap().locals.get_keyed(local_key).ok_or(IrErrData::InvalidLocalKey(local_key))?;
 
 		Ok(local)
 	}
@@ -779,7 +791,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 			Ret
 			=> {
-				if let Some(expected) = self.function.result {
+				if let Some(expected) = self.function.unwrap().result {
 					let expected = self.builder.get_finalized_ty(expected)?;
 
 					let result = self.builder.get_ty(self.stack.pop()?)?;
@@ -826,7 +838,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 	pub fn check_ir (&mut self, block_key: BlockKey) -> FunctionResult {
 		// let block_key = block_key.as_key();
-		let block = self.function.block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key)).at(FunctionErrLocation::Root)?;
+		let block = self.function.unwrap().block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key)).at(FunctionErrLocation::Root)?;
 
 		for (i, node) in block.ir.iter().enumerate() {
 			self.check_node(block, node).at(FunctionErrLocation::Node(block_key, i))?;
@@ -882,14 +894,10 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 	}
 
 	pub fn check_out_edge_values (&mut self, block_key: BlockKey) -> FunctionResult {
-		dbg!("wtf mate");
-
 		let out_values = match self.cfg.get_out_values(block_key) {
 			Ok(x) if !x.is_empty() => x,
 			_ => return Ok(())
 		};
-
-		dbg!("u w0t");
 
 		let succs = match self.cfg.get_successors(block_key) {
 			Ok(x) if !x.is_empty() => x,
@@ -898,9 +906,6 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 					.at(FunctionErrLocation::Block(block_key))
 			)
 		};
-
-		dbg!(succs.len());
-
 
 		for &succ in succs.iter() {
 			self.cfg
@@ -918,11 +923,11 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 
 	pub fn check_function (&mut self) -> FunctionResult {
-		for &block_key in self.function.block_order.iter() {
+		for &block_key in self.function.unwrap().block_order.iter() {
 			self.check_ir(block_key)?;
 		}
 
-		for &block_key in self.function.block_order.iter() {
+		for &block_key in self.function.unwrap().block_order.iter() {
 			self.check_in_edge_values(block_key)?;
 			self.check_out_edge_values(block_key)?;
 		}
@@ -934,7 +939,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 
 
-pub fn check (builder: &mut Builder<'_>, cfg: Cfg, function_key: FunctionKey) -> IrResult<Cfg> {
+pub fn check_function (builder: &mut Builder<'_>, cfg: Cfg, function_key: FunctionKey) -> IrResult<Cfg> {
 	// SAFETY:
 	// MIRI may not like this but it is safe;
 
@@ -944,7 +949,7 @@ pub fn check (builder: &mut Builder<'_>, cfg: Cfg, function_key: FunctionKey) ->
 	// because the process here is deeply recursive while traversing the function's parts, and at any depth it
 	// can perform a mutation in the type system
 
-	// This is be safe because the `functions` slotmap field of the builder's context is never mutated during typechecking
+	// This is safe because the `functions` slotmap field of the builder's context is never mutated during typechecking
 
 	// The following simply gets a reference to the function without borrowing the builder
 	let function = unsafe {
@@ -957,9 +962,38 @@ pub fn check (builder: &mut Builder<'_>, cfg: Cfg, function_key: FunctionKey) ->
 		)
 	};
 
-	let mut state = TyChecker::new(builder, cfg, function);
+	let mut state = TyChecker::for_function(builder, cfg, function);
 
 	state.check_function().at(function_key)?;
 
 	Ok(state.cfg)
+}
+
+
+pub fn check_global (builder: &mut Builder<'_>, global_key: GlobalKey) -> IrResult {
+	// SAFETY:
+	// see check_function
+	let global: &Global = unsafe {
+		&*(
+			builder
+				.get_global(global_key)
+				.unwrap()
+				.into_ref()
+			as *const _
+		)
+	};
+
+	let state = TyChecker::for_global(builder);
+
+	let loc = IrErrLocation::Global(global_key);
+
+	let ty = state.builder.get_finalized_ty(global.ty).at(loc)?;
+
+	if let Some(init) = global.init.as_ref() {
+		let init_ty = state.get_constant_ty(init).at(loc)?;
+
+		assert(state.ty_eq(ty, init_ty), TyErr::ExpectedTy(ty.as_key(), init_ty.as_key()).at(loc))?;
+	}
+
+	Ok(())
 }

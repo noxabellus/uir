@@ -53,13 +53,12 @@ mod test {
 			f.ret();
 		});
 
-		let (function, result) = f.finalize();
-		let function = function.as_key();
+		let (_function, result) = f.finalize();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("add.ir");
-		let output = format!("{}", PrinterState::new(&context).with_result(result).print_function(function));
+		let output = format!("{}", PrinterState::new(&context).with_result(result).print_self());
 		write(&path, &output).unwrap();
 		println!("{}", &output);
 

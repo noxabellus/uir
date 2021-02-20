@@ -62,6 +62,55 @@ pub enum CastOp {
 	Bitcast,
 }
 
+impl fmt::Display for BinaryOp {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			BinaryOp::Add => write!(f, "add"),
+			BinaryOp::Sub => write!(f, "sub"),
+			BinaryOp::Mul => write!(f, "mul"),
+			BinaryOp::Div => write!(f, "div"),
+			BinaryOp::Rem => write!(f, "rem"),
+			BinaryOp::Eq => write!(f, "eq"),
+			BinaryOp::Ne => write!(f, "ne"),
+			BinaryOp::Lt => write!(f, "lt"),
+			BinaryOp::Gt => write!(f, "gt"),
+			BinaryOp::Le => write!(f, "le"),
+			BinaryOp::Ge => write!(f, "ge"),
+			BinaryOp::LAnd => write!(f, "land"),
+			BinaryOp::LOr => write!(f, "lor"),
+			BinaryOp::BAnd => write!(f, "band"),
+			BinaryOp::BOr => write!(f, "bor"),
+			BinaryOp::BXor => write!(f, "bxor"),
+			BinaryOp::LSh => write!(f, "lsh"),
+			BinaryOp::RShA => write!(f, "rsha"),
+			BinaryOp::RShL => write!(f, "rshl"),
+		}
+	}
+}
+
+impl fmt::Display for UnaryOp {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			UnaryOp::Neg => write!(f, "neg"),
+			UnaryOp::LNot => write!(f, "lnot"),
+			UnaryOp::BNot => write!(f, "bnot"),
+		}
+	}
+}
+
+impl fmt::Display for CastOp {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			CastOp::IntToReal => write!(f, "int_to_real"),
+			CastOp::RealToInt => write!(f, "real_to_int"),
+			CastOp::ZeroExtend => write!(f, "zero_extend"),
+			CastOp::SignExtend => write!(f, "sign_extend"),
+			CastOp::Truncate => write!(f, "truncate"),
+			CastOp::Bitcast => write!(f, "bitcast"),
+		}
+	}
+}
+
 #[derive(Debug, Clone)]
 pub enum ConstantAggregateData {
 	Uninitialized,
@@ -112,7 +161,7 @@ impl Constant {
 			UInt8(x) => x as u64,
 			UInt16(x) => x as u64,
 			UInt32(x) => x as u64,
-			UInt64(x) => x as u64,
+			UInt64(x) => x,
 			UInt128(x) if x < u64::MAX as u128 => x as u64,
 			_ => return None,
 		})
@@ -172,12 +221,12 @@ impl IrData {
 
 		matches!(
 			self,
-			Branch { .. }
-				| CondBranch { .. }
-				| Switch { .. }
-				| ComputedBranch { .. }
-				| Ret
-				| Unreachable
+			  Branch { .. }
+			| CondBranch { .. }
+			| Switch { .. }
+			| ComputedBranch { .. }
+			| Ret
+			| Unreachable
 		)
 	}
 
@@ -251,6 +300,14 @@ pub enum IrMeta {
 	User(String),
 }
 
+impl fmt::Display for IrMeta {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			IrMeta::User(str) => write!(f, "{}", str.escape_debug())
+		}
+	}
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Param {
 	pub name: Option<String>,
@@ -264,6 +321,14 @@ pub enum ParamMeta {
 	User(String),
 }
 
+impl fmt::Display for ParamMeta {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			ParamMeta::User(str) => write!(f, "{}", str.escape_debug())
+		}
+	}
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Local {
 	pub name: Option<String>,
@@ -275,6 +340,14 @@ pub struct Local {
 #[derive(Debug)]
 pub enum LocalMeta {
 	User(String),
+}
+
+impl fmt::Display for LocalMeta {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			LocalMeta::User(str) => write!(f, "{}", str.escape_debug())
+		}
+	}
 }
 
 #[derive(Debug, Clone, Default)]
@@ -303,7 +376,15 @@ pub enum FunctionMeta {
 	User(String),
 }
 
-#[derive(Debug)]
+impl fmt::Display for FunctionMeta {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			FunctionMeta::User(str) => write!(f, "{}", str.escape_debug())
+		}
+	}
+}
+
+#[derive(Debug, Default)]
 pub struct Global {
 	pub name: Option<String>,
 	pub ty: TyKey,
@@ -315,6 +396,14 @@ pub struct Global {
 #[derive(Debug)]
 pub enum GlobalMeta {
 	User(String),
+}
+
+impl fmt::Display for GlobalMeta {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			GlobalMeta::User(str) => write!(f, "{}", str.escape_debug())
+		}
+	}
 }
 
 #[derive(Debug, Default)]
@@ -378,8 +467,8 @@ impl Context {
 		self.tys.insert(ty)
 	}
 
-	pub fn predict_collapse (&self) -> ContextCollpasePredictor<'_> {
-		ContextCollpasePredictor {
+	pub fn predict_collapse (&self) -> ContextCollapsePredictor<'_> {
+		ContextCollapsePredictor {
 			context: self,
 
 			srcs: self.srcs.predict_collapse(),
@@ -405,8 +494,20 @@ pub struct MetaCollapsePredictor<'c> {
 	pub ir: SlotmapCollapsePredictor<'c, IrMetaKey, IrMeta>,
 }
 
+impl<'c> MetaCollapsePredictor<'c> {
+	pub fn is_empty (&self) -> bool {
+		   self.ty.is_empty()
+		&& self.function.is_empty()
+		&& self.param.is_empty()
+		&& self.local.is_empty()
+		&& self.global.is_empty()
+		&& self.ir.is_empty()
+	}
+}
+
+
 #[derive(Debug)]
-pub struct ContextCollpasePredictor<'c> {
+pub struct ContextCollapsePredictor<'c> {
 	pub context: &'c Context,
 
 	pub srcs: SlotmapCollapsePredictor<'c, SrcKey, Src>,
@@ -418,7 +519,7 @@ pub struct ContextCollpasePredictor<'c> {
 	pub meta: MetaCollapsePredictor<'c>
 }
 
-impl<'c> ContextCollpasePredictor<'c> {
+impl<'c> ContextCollapsePredictor<'c> {
 	pub fn function_predictor (&self, key: FunctionKey) -> Option<FunctionCollapsePredictor<'c>> {
 		if let Some(index) = self.functions.get_index(key) {
 			if let Some(value) = self.context.functions.get(key) {

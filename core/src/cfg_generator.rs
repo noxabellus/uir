@@ -11,6 +11,10 @@ fn walk_block (function: &Function, cfg: &mut Cfg, block_key: BlockKey) -> Funct
 			.at(FunctionErrLocation::Root)
 	)?;
 
+	if block.ir.is_empty() {
+		return Err(IrErrData::EmptyBlock(block_key).at(FunctionErrLocation::Block(block_key)))
+	}
+
 	let mut iter = block.ir.iter().enumerate();
 	let mut phi_closed = false;
 

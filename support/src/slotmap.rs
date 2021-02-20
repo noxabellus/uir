@@ -1,10 +1,4 @@
-use std::{
-	ops,
-	slice,
-	vec,
-	collections::HashMap,
-	hash::Hash,
-};
+use std::{collections::HashMap, hash::Hash, ops, slice, vec};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Copy)]
@@ -148,7 +142,7 @@ macro_rules! slotmap_keyable {
 		),+ $(,)?
 	) => {
 		$(
-			$crate::paste::paste! {
+			$crate::paste! {
 				$crate::slotmap_key_ty! {
 					$($meta)*
 					pub struct [<$tyname Key>];
@@ -406,11 +400,11 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 
 	pub fn predict_collapse (&self) -> SlotmapCollapsePredictor<'_, K, V> {
 		let mut key_to_idx = HashMap::default();
-		let mut idx_to_key = HashMap::default();
+		let mut idx_to_key = Vec::default();
 
 		for (i, (&k, _)) in self.iter().enumerate() {
 			key_to_idx.insert(k, i);
-			idx_to_key.insert(i, k);
+			idx_to_key.push(k);
 		}
 
 		SlotmapCollapsePredictor {
@@ -461,7 +455,7 @@ impl<K: Key, V: Keyable<Key = K>> CollapsedSlotmap<K, V> {
 #[derive(Debug, Clone)]
 pub struct SlotmapCollapsePredictor<'s, K: Key, V: Keyable<Key = K>> {
 	key_to_idx: HashMap<K, usize>,
-	idx_to_key: HashMap<usize, K>,
+	idx_to_key: Vec<K>,
 	base: &'s Slotmap<K, V>
 }
 
@@ -471,7 +465,7 @@ impl<'s, K: Key, V: Keyable<Key = K>> SlotmapCollapsePredictor<'s, K, V> {
 	}
 
 	pub fn get_key (&self, idx: usize) -> Option<K> {
-		self.idx_to_key.get(&idx).copied()
+		self.idx_to_key.get(idx).copied()
 	}
 
 	pub fn len (&self) -> usize {
@@ -492,6 +486,10 @@ impl<'s, K: Key, V: Keyable<Key = K>> SlotmapCollapsePredictor<'s, K, V> {
 
 	pub fn get_value_by_index (&self, idx: usize) -> Option<&V> {
 		self.get_value(self.get_key(idx)?)
+	}
+
+	pub fn iter (&self) -> slice::Iter<'_, K> {
+		self.idx_to_key.iter()
 	}
 }
 
