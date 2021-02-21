@@ -55,21 +55,32 @@ pub enum PrimitiveTy {
 }
 
 impl PrimitiveTy {
-	pub fn as_str (&self) -> &'static str {
+	pub fn size (&self) -> usize {
+		use PrimitiveTy::*;
 		match self {
-			PrimitiveTy::Bool => "bool",
-			PrimitiveTy::SInt8 => "sint8",
-			PrimitiveTy::SInt16 => "sint16",
-			PrimitiveTy::SInt32 => "sint32",
-			PrimitiveTy::SInt64 => "sint64",
-			PrimitiveTy::SInt128 => "sint128",
-			PrimitiveTy::UInt8 => "uint8",
-			PrimitiveTy::UInt16 => "uint16",
-			PrimitiveTy::UInt32 => "uint32",
-			PrimitiveTy::UInt64 => "uint64",
-			PrimitiveTy::UInt128 => "uint128",
-			PrimitiveTy::Real32 => "real32",
-			PrimitiveTy::Real64 => "real64",
+			Bool | SInt8 | UInt8 => 1,
+			SInt16 | UInt16 => 2,
+			Real32 | SInt32 | UInt32 => 4,
+			Real64 | SInt64 | UInt64 => 8,
+			SInt128 | UInt128 => 16,
+		}
+	}
+	pub fn as_str (&self) -> &'static str {
+		use PrimitiveTy::*;
+		match self {
+			Bool => "bool",
+			SInt8 => "sint8",
+			SInt16 => "sint16",
+			SInt32 => "sint32",
+			SInt64 => "sint64",
+			SInt128 => "sint128",
+			UInt8 => "uint8",
+			UInt16 => "uint16",
+			UInt32 => "uint32",
+			UInt64 => "uint64",
+			UInt128 => "uint128",
+			Real32 => "real32",
+			Real64 => "real64",
 		}
 	}
 }
