@@ -7,11 +7,16 @@ edition = "2018"
 [lib]
 path = "./lib.rs"
 
+[[bin]]
+name = "uirc"
+path = "./driver.rs"
+
 [dependencies]
 support = { package = "uir-support", path = "./support" }
 core = { package = "uir-core", path = "./core" }
 llvm-backend = { package = "uir-llvm-backend", path = "./backends/llvm", optional = true }
+cli = { package = "uir-cli", path = "./cli" }
 
 
 [workspace]
-members = [ "./support", "./core", "./backends/llvm" ]
+members = [ "./support", "./core", "./backends/llvm", "./cli" ]
