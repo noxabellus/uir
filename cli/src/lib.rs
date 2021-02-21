@@ -23,7 +23,7 @@ impl fmt::Display for OptErr {
 pub type OptResult<T = ()> = Result<T, OptErr>;
 
 pub trait OptData<'s> {
-	fn process (&mut self, input: &mut env::Args) -> OptResult;
+	fn process (&mut self, arg: &str, input: &mut env::Args) -> OptResult;
 
 	fn dump (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 }
@@ -35,11 +35,21 @@ impl<'s> fmt::Display for &dyn OptData<'s> {
 }
 
 impl<'s> OptData<'s> for String {
-	fn process (&mut self, input: &mut env::Args) -> OptResult {
-		let value = input.next().ok_or(OptErr::RequiresOperand)?;
+	fn process (&mut self, mut arg_data: &str, input: &mut env::Args) -> OptResult {
+		if !arg_data.is_empty() {
+			if arg_data.starts_with('=')
+			&& arg_data.len() > 1 {
+				arg_data = &arg_data[1..];
+			}
 
-		self.clear();
-		self.push_str(&value);
+			self.clear();
+			self.push_str(&arg_data);
+		} else {
+			let value = input.next().ok_or(OptErr::RequiresOperand)?;
+
+			self.clear();
+			self.push_str(&value);
+		}
 
 		Ok(())
 	}
@@ -50,8 +60,13 @@ impl<'s> OptData<'s> for String {
 }
 
 impl<'s> OptData<'s> for bool {
-	fn process (&mut self, _input: &mut env::Args) -> OptResult {
+	fn process (&mut self, arg_data: &str, _input: &mut env::Args) -> OptResult {
+		if !arg_data.is_empty() {
+			return Err(OptErr::UnparseableArgData(arg_data.to_owned()))
+		}
+
 		*self = !*self;
+
 		Ok(())
 	}
 
@@ -65,10 +80,19 @@ impl<'s> OptData<'s> for bool {
 macro_rules! impl_opt_data_via_parse_and_display {
 	($($ty:ty),* $(,)?) => { $(
 		impl<'s> $crate::OptData<'s> for $ty {
-			fn process (&mut self, input: &mut ::std::env::Args) -> $crate::OptResult {
-				let value = input.next().ok_or($crate::OptErr::RequiresOperand)?;
+			fn process (&mut self, mut arg_data: &str, input: &mut ::std::env::Args) -> $crate::OptResult {
+				if !arg_data.is_empty() {
+					if arg_data.starts_with('=')
+					&& arg_data.len() > 1 {
+						arg_data = &arg_data[1..];
+					}
 
-				*self = (&value).parse().map_err(|_| $crate::OptErr::UnparseableArgData(value))?;
+					*self = arg_data.parse().map_err(|_| $crate::OptErr::UnparseableArgData(arg_data.to_owned()))?;
+				} else {
+					let value = input.next().ok_or(OptErr::RequiresOperand)?;
+
+					*self = (&value).parse().map_err(|_| $crate::OptErr::UnparseableArgData(value))?;
+				}
 
 				Ok(())
 			}
@@ -99,13 +123,13 @@ pub struct Opt<'d, 's> {
 impl<'d, 's> Opt<'d, 's> {
 	fn try_parse (&mut self, arg: &str, input: &mut env::Args) -> Option<OptResult> {
 		if arg.starts_with("--")
-		&& &arg[2..] == self.long {
-			return Some(self.data.process(input))
+		&& arg[2..].starts_with(self.long) {
+			return Some(self.data.process(&arg[2 + self.long.len()..], input))
 		}
 
 		if arg.starts_with('-')
-		&& &arg[1..] == self.short {
-			return Some(self.data.process(input))
+		&& arg[1..].starts_with(self.short) {
+			return Some(self.data.process(&arg[1 + self.short.len()..], input))
 		}
 
 		None
@@ -132,7 +156,10 @@ impl fmt::Display for CliErr {
 }
 
 pub enum CliResult {
-	Ok,
+	Ok {
+		positional: Vec<String>,
+		pass_through: Option<Vec<String>>
+	},
 	RequestExit,
 	Err(CliErr),
 }
@@ -156,42 +183,58 @@ impl<'d, 's> Cli<'d, 's> {
 	pub fn parse (&mut self, mut args: env::Args) -> CliResult {
 		let mut i = 0;
 
+		let mut positional = vec![];
+
 		'args: while let Some(arg) = args.next() {
-			if i == 0 {
+			dbg!(&arg);
+
+			let bytes = arg.as_bytes();
+
+			if (bytes.len() > 2 && bytes.starts_with(b"--"))
+			|| (arg.len() > 1 && bytes[0] == b'-' && bytes[1] != b'-') {
 				if arg == "-h" || arg == "--help" {
-					self.dump();
+					if i == 0 {
+						self.dump();
 
-					if args.next().is_some() {
-						println!("Remaining args ignored ...");
+						if args.next().is_some() {
+							println!("Remaining args ignored ...");
+						}
+
+						return CliResult::RequestExit
+					} else {
+						return CliResult::Err(CliErr(i, OptErr::InvalidHelpArg))
 					}
-
-					return CliResult::RequestExit
 				}
-			} else {
-				return CliResult::Err(CliErr(i, OptErr::InvalidHelpArg))
-			}
 
-			for opt in self.0.iter_mut() {
-				match opt.try_parse(&arg, &mut args) {
-					None => continue,
-					Some(Ok(_)) => {
-						i += 1;
-						continue 'args
-					},
-					Some(Err(e)) => return CliResult::Err(CliErr(i, e))
+				for opt in self.0.iter_mut() {
+					match opt.try_parse(&arg, &mut args) {
+						None => continue,
+						Some(Ok(_)) => {
+							i += 1;
+							continue 'args
+						},
+						Some(Err(e)) => return CliResult::Err(CliErr(i, e))
+					}
 				}
-			}
 
-			// if we make it here no opt succeeded in parsing the current input
-			if (arg.starts_with("--") && arg.len() > 2)
-			|| (arg.starts_with('-') && arg.len() > 1) {
+				// if we make it here no opt succeeded in parsing the current input
 				return CliResult::Err(CliErr(i, OptErr::UnknownArg(arg)))
+			} else if arg == "--" {
+				let pass_through = Some(args.collect());
+
+				return CliResult::Ok {
+					positional,
+					pass_through
+				}
 			}
 
-			break
+			positional.push(arg);
 		}
 
-		CliResult::Ok
+		CliResult::Ok {
+			positional,
+			pass_through: None
+		}
 	}
 
 	pub fn dump (&mut self) {

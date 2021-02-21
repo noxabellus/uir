@@ -23,8 +23,10 @@ fn main () {
 		w : -w / --extra_w
 		"Sets the w value"
 	}.parse(args) {
-		CliResult::Ok => {
+		CliResult::Ok { positional, pass_through } => {
 			println!("\nparsed args:\n x: {}, y: {}, z: {}, w: {}", x, y, z, w);
+			println!("positional args:\n{:#?}", positional);
+			println!("pass through args:\n{:#?}", pass_through);
 		}
 
 		CliResult::RequestExit => {
