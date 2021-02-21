@@ -139,20 +139,24 @@ impl<'c> LLVMBackend<'c> {
 				Array { length, element_ty } => LLVMArrayType(self.emit_ty(*element_ty), *length as _),
 
 				Structure { field_tys } => {
-					let mut elem_types = field_tys.iter().map(|&ty_key| self.emit_ty(ty_key)).collect::<Vec<_>>();
-
-					if let Some(name) = ty.name.as_ref() {
-						let llname = LLVMString::from(name);
-						let s = LLVMStructCreateNamed(self.llctx, llname.as_ptr());
-						LLVMStructSetBody(s, elem_types.as_mut_ptr(), elem_types.len() as _, LLVMFalse);
-						s
+					let llname = if let Some(name) = ty.name.as_ref() {
+						LLVMString::from(name)
 					} else {
-						LLVMStructTypeInContext(self.llctx, elem_types.as_mut_ptr(), elem_types.len() as _, LLVMFalse)
-					}
+						LLVMString::from(format!("$t({})", self.ctx.tys.get_index(ty_key).unwrap()))
+					};
+
+					let llty = LLVMStructCreateNamed(self.llctx, llname.as_ptr());
+					self.type_map_mut().insert(ty_key, llty);
+
+					let mut elem_types = field_tys.iter().map(|&ty_key| self.emit_ty(ty_key)).collect::<Vec<_>>();
+					LLVMStructSetBody(llty, elem_types.as_mut_ptr(), elem_types.len() as _, LLVMFalse);
+
+					llty
 				}
 
 				Function { parameter_tys, result_ty } => {
 					let mut param_types = parameter_tys.iter().map(|&ty_key| self.emit_ty(ty_key)).collect::<Vec<_>>();
+
 					let result_type = if let Some(ty_key) = result_ty {
 						self.emit_ty(*ty_key)
 					} else {
