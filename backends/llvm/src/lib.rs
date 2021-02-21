@@ -184,9 +184,11 @@ impl<'c> LLVMBackend<'c> {
 			SInt64(val) => LLVMConstInt(self.prim_ty(PrimitiveTy::SInt64), *val as _, LLVMTrue),
 
 			SInt128(val) => {
-				let a = (*val as u128) << 64;
-				let b = (*val as u128) & (u128::MAX << 64);
-				LLVMConstIntOfArbitraryPrecision(self.prim_ty(PrimitiveTy::SInt128), 2, [a as u64, b as u64].as_ptr())
+				LLVMConstIntOfArbitraryPrecision(
+					self.prim_ty(PrimitiveTy::SInt128),
+					2,
+					std::mem::transmute::<_, [u64; 2]>(*val).as_ptr()
+				)
 			}
 
 			UInt8(val) => LLVMConstInt(self.prim_ty(PrimitiveTy::UInt8), *val as _, LLVMFalse),
@@ -194,10 +196,12 @@ impl<'c> LLVMBackend<'c> {
 			UInt32(val) => LLVMConstInt(self.prim_ty(PrimitiveTy::UInt32), *val as _, LLVMFalse),
 			UInt64(val) => LLVMConstInt(self.prim_ty(PrimitiveTy::UInt64), *val as _, LLVMFalse),
 
-			UInt128(val) => {
-				let a = *val << 64;
-				let b = *val & (u128::MAX << 64);
-				LLVMConstIntOfArbitraryPrecision(self.prim_ty(PrimitiveTy::SInt128), 2, [a as u64, b as u64].as_ptr())
+			UInt128(val) =>  {
+				LLVMConstIntOfArbitraryPrecision(
+					self.prim_ty(PrimitiveTy::UInt128),
+					2,
+					std::mem::transmute::<_, [u64; 2]>(*val).as_ptr()
+				)
 			}
 
 			Real32(val) => LLVMConstReal(self.prim_ty(PrimitiveTy::Real32), *val as _),
