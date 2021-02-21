@@ -174,7 +174,7 @@ impl<'c> LLVMBackend<'c> {
 		use Constant::*;
 
 		match constant {
-			Null(ty_key) => LLVMConstNull(self.emit_ty(*ty_key)),
+			Null(ty_key) => LLVMConstPointerNull(self.emit_ty(*ty_key)),
 
 			Bool(val) => LLVMConstInt(self.prim_ty(PrimitiveTy::Bool), *val as _, LLVMFalse),
 
