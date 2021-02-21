@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
-use llvm_sys::prelude::{LLVMContextRef, LLVMValueRef};
+use llvm_sys::prelude::*;
 
-use uir_core::ir::*;
+use uir_core::{
+	ty::*,
+	ir::*
+};
 
 pub enum LLVMErr {
 	InvalidFunctionKey(FunctionKey),
@@ -13,6 +16,7 @@ pub type LLVMResult<T = ()> = Result<T, LLVMErr>;
 pub struct LLVMBackend<'c> {
 	pub ctx: &'c Context,
 	pub llctx: LLVMContextRef,
+	pub types: HashMap<TyKey, LLVMTypeRef>,
 	pub globals: HashMap<GlobalKey, LLVMValueRef>,
 	pub functions: HashMap<FunctionKey, LLVMValueRef>,
 }
