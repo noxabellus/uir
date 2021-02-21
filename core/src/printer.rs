@@ -1,15 +1,14 @@
-use std::{cell::{Ref, RefCell}, fmt, hint::unreachable_unchecked};
-
-use fmt::{Display, Formatter, Write};
-use support::{slotmap::{Key, Keyable, SlotmapCollapsePredictor}, utils::index_of};
-
-
-use support::{
-	utils::flip_ref_opt_to_opt_ref,
-	slotmap::{ Keyed, AsKey },
+use std::{
+	fmt,
+	cell::{ Ref, RefCell },
+	hint::unreachable_unchecked,
 };
 
-use crate::{cfg::CfgErr, ir::MetaCollapsePredictor, ty::TyErr};
+use support::{
+	utils::{ flip_ref_opt_to_opt_ref, index_of },
+	slotmap::{ Key, Keyable, Keyed, AsKey, SlotmapCollapsePredictor },
+};
+
 
 use super::{
 	builder::{
@@ -20,12 +19,13 @@ use super::{
 		FunctionErrLocation
 	},
 	src::SrcAttribution,
+	cfg::CfgErr,
 	ir::{
 		GlobalKey,
 		Context,
 		FunctionCollapsePredictor,
+		MetaCollapsePredictor,
 		FunctionKey,
-		BinaryOp,
 		LocalMetaKey,
 		ParamMetaKey,
 		AggregateData,
@@ -40,11 +40,9 @@ use super::{
 		ContextCollapsePredictor,
 		FunctionMetaKey,
 		Constant,
-		CastOp,
 		Function,
 		Global,
 		IrData,
-		UnaryOp,
 		FunctionMeta,
 		GlobalMeta,
 		ParamMeta,
@@ -55,9 +53,9 @@ use super::{
 		TyKey,
 		TyMetaKey,
 		TyMeta,
-		PrimitiveTy,
 		TyData,
-		Ty
+		TyErr,
+		Ty,
 	},
 };
 
@@ -160,13 +158,13 @@ impl<'ctx> PrinterState<'ctx> {
 pub struct Indent(usize);
 impl fmt::Display for Indent {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		for _ in 0..self.0 { f.write_char('\t')?; }
+		for _ in 0..self.0 { write!(f, "\t")?; }
 		Ok(())
 	}
 }
 
 
-pub trait Printer<'data, 'ctx>: Display {
+pub trait Printer<'data, 'ctx>: fmt::Display {
 	type Data: ?Sized;
 
 	fn data (&self) -> Self::Data;
@@ -218,7 +216,7 @@ pub trait Printer<'data, 'ctx>: Display {
 }
 
 pub trait Printable<'data, 'ctx> {
-	type Printer: Display;
+	type Printer: fmt::Display;
 	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer;
 }
 
@@ -306,15 +304,15 @@ where
 
 
 
-pub struct DPrinter<'data, 'ctx, D: ?Sized + Display> (&'data D, &'ctx PrinterState<'ctx>);
-impl<'data, 'ctx, D: ?Sized + Display> Printer<'data, 'ctx> for DPrinter<'data, 'ctx, D> {
+pub struct DPrinter<'data, 'ctx, D: ?Sized + fmt::Display> (&'data D, &'ctx PrinterState<'ctx>);
+impl<'data, 'ctx, D: ?Sized + fmt::Display> Printer<'data, 'ctx> for DPrinter<'data, 'ctx, D> {
 	type Data = &'data D;
 
 	fn data (&self) -> &'data D { self.0 }
 	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
 }
 
-impl<'data, 'ctx, D: ?Sized + Display> fmt::Display for DPrinter<'data, 'ctx, D> {
+impl<'data, 'ctx, D: ?Sized + fmt::Display> fmt::Display for DPrinter<'data, 'ctx, D> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "{}", self.0)
 	}
