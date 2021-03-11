@@ -1,6 +1,6 @@
 use std::{cell::Ref, ops::{self, Deref}};
 
-use support::{slotmap::{AsKey, Keyed, KeyedMut}};
+use support::{slotmap::{AsKey, Keyed, KeyedMut}, utils::assert};
 
 use crate::cfg_generator;
 
@@ -698,6 +698,22 @@ impl<'c> Builder<'c> {
 		Ok(TyManipulator(self.ctx.add_ty(TyData::Array { length, element_ty }.into())))
 	}
 
+	pub fn empty_structure_ty (&mut self) -> TyManipulator {
+		TyManipulator(self.ctx.add_ty(TyData::Structure { field_tys: Vec::default() }.into()))
+	}
+
+	pub fn set_structure_ty_body (&mut self, ty_key: TyKey, body: Vec<TyKey>) -> IrDataResult<TyManipulator> {
+		match self.get_ty_mut(ty_key).map(KeyedMut::into_mut) {
+			Ok(Ty { data: TyData::Structure { field_tys }, .. }) => {
+				assert(field_tys.is_empty(), IrErrData::TyErr(TyErr::ExpectedStructure(ty_key)))?;
+				*field_tys = body;
+				Ok(TyManipulator(self.get_ty_mut(ty_key).unwrap()))
+			}
+			Err(e) => Err(e),
+			_ => Err(IrErrData::TyErr(TyErr::ExpectedStructure(ty_key)))
+		}
+	}
+
 	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrDataResult<TyManipulator> {
 		for &ft in field_tys.iter() {
 			self.get_ty(ft)?;
@@ -786,9 +802,9 @@ impl<'c> Builder<'c> {
 			let layout = match &ty.data {
 				Void => Layout::custom_scalar(0, 1),
 
-				&Primitive(prim) => self.ctx.target.get_primitive_layout(prim),
+				&Primitive(prim) => self.ctx.target.primitive_layout(prim),
 
-				Block | &Pointer { .. } | &Function { .. } => self.ctx.target.get_pointer_layout(),
+				Block | &Pointer { .. } | &Function { .. } => self.ctx.target.pointer_layout(),
 
 				&Array { length, element_ty } => {
 					let layout_ref = self.finalize_ty(element_ty)?;

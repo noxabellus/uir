@@ -1,20 +1,27 @@
-use std::fmt;
+use std::{ any::Any, fmt };
+
 
 use super::{
 	ty::{ PrimitiveTy, Layout }
 };
 
-pub trait Target: fmt::Debug {
-	fn get_primitive_layout (&self, ty: PrimitiveTy) -> Layout;
-	fn get_word_size (&self) -> u64;
-	fn get_pointer_layout (&self) -> Layout { Layout::scalar(self.get_word_size()) }
+pub trait Target: fmt::Debug + Any {
+	fn primitive_layout (&self, ty: PrimitiveTy) -> Layout;
+	fn word_size (&self) -> u64;
+
+	fn pointer_layout (&self) -> Layout { Layout::scalar(self.word_size()) }
 }
 
-#[derive(Debug)]
-pub struct X64Linux;
 
-impl Target for X64Linux {
-	fn get_primitive_layout (&self, ty: PrimitiveTy) -> Layout {
+
+
+
+
+#[derive(Debug)]
+pub struct AMD64;
+
+impl Target for AMD64 {
+	fn primitive_layout (&self, ty: PrimitiveTy) -> Layout {
 		use PrimitiveTy::*;
 
 		match ty {
@@ -26,13 +33,49 @@ impl Target for X64Linux {
 		}
 	}
 
-	fn get_word_size(&self) -> u64 {
-		8
-	}
+	fn word_size(&self) -> u64 { 8 }
 }
 
-impl Default for Box<dyn Target> {
-	fn default () -> Self {
-		Box::new(crate::target::X64Linux)
-	}
+
+
+macro_rules! create_native_target {
+	($(
+		[$meta:meta] $ident:ident
+	)*) => {
+		$(
+			#[cfg($meta)]
+			pub const NATIVE_TARGET: $ident = $ident;
+		)*
+
+		#[cfg(any($($meta),*))]
+		impl Default for Box<dyn Target> {
+			fn default () -> Self {
+				Box::new(NATIVE_TARGET)
+			}
+		}
+
+		#[cfg(not(any($($meta),*)))]
+		impl Default for Box<dyn Target> {
+			fn default () -> Self {
+				panic!("No native target exists for the host platform, cannot default-initialize")
+			}
+		}
+	};
+}
+
+create_native_target! {
+	[target_arch = "aarch64"]
+	AARCH64
+
+	[all(target_family = "unix", target_arch = "x86_64")]
+	AMD64
+
+	[all(target_family = "unix", target_arch = "x86")]
+	X86
+
+	[all(target_family = "windows", target_arch = "x86_64")]
+	WIN64
+
+	[all(target_family = "windows", target_arch = "x86")]
+	WIN32
 }

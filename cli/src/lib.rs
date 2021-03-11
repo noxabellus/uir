@@ -165,10 +165,10 @@ pub enum CliResult {
 }
 
 
-pub struct Cli<'d, 's> (pub Vec<Opt<'d, 's>>);
+pub struct Cli<'d, 's> (pub &'d mut [Opt<'d, 's>]);
 
 impl<'d, 's> Cli<'d, 's> {
-	pub fn new (opts: Vec<Opt<'d, 's>>) -> Self {
+	pub fn new (opts: &'d mut [Opt<'d, 's>]) -> Self {
 		if cfg!(debug_assertions) {
 			for opt in opts.iter() {
 				assert_ne!(opt.name, "help");
@@ -191,7 +191,7 @@ impl<'d, 's> Cli<'d, 's> {
 			let bytes = arg.as_bytes();
 
 			if (bytes.len() > 2 && bytes.starts_with(b"--"))
-			|| (arg.len() > 1 && bytes[0] == b'-' && bytes[1] != b'-') {
+			|| (bytes.len() > 1 && bytes[0] == b'-' && bytes[1] != b'-') {
 				if arg == "-h" || arg == "--help" {
 					if i == 0 {
 						self.dump();
@@ -266,7 +266,7 @@ macro_rules! cli {
 		$name:ident : -$short:ident / --$long:ident
 		$description:literal
 	)*) => {
-		$crate::Cli::new(vec![
+		$crate::Cli::new(&mut [
 			$(
 				{
 					macro_rules! static_assert {

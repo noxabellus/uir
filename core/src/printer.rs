@@ -1179,6 +1179,7 @@ impl<'data, 'ctx> fmt::Display for TyErrPrinter<'data, 'ctx> {
 			TyErr::ExpectedTy(expected_ty, found_ty) => { write!(f, "Expected type {}, but found {}", self.child(expected_ty), self.child(found_ty)) }
 			TyErr::ExpectedArray(ty_key) => { write!(f, "Value is not an array but {}", self.child(ty_key)) }
 			TyErr::ExpectedStructure(ty_key) => { write!(f, "Value is not a struct but {}", self.child(ty_key)) }
+			TyErr::ExpectedEmptyStructure(ty_key) => { write!(f, "Expected structure type {} to have no fields", self.child(ty_key)) }
 			TyErr::ExpectedFunction(ty_key) => { write!(f, "Value is not a function but {}", self.child(ty_key)) }
 			TyErr::ExpectedBlock(ty_key) => { write!(f, "Value is not a block reference but {}", self.child(ty_key)) }
 			TyErr::ExpectedPointer(ty_key) => { write!(f, "Value is not a pointer but {}", self.child(ty_key)) }

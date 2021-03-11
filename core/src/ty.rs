@@ -27,6 +27,7 @@ pub enum TyErr {
 	ExpectedTy(TyKey, TyKey),
 	ExpectedArray(TyKey),
 	ExpectedStructure(TyKey),
+	ExpectedEmptyStructure(TyKey),
 	ExpectedFunction(TyKey),
 	ExpectedBlock(TyKey),
 	ExpectedPointer(TyKey),

@@ -457,13 +457,6 @@ impl Context {
 	}
 
 	pub(crate) fn add_ty(&mut self, ty: Ty) -> KeyedMut<Ty> {
-		for (&key, existing_ty) in self.tys.iter_mut() {
-			if ty.equivalent(existing_ty) {
-				*existing_ty = ty; // handle populating meta data
-				return self.tys.get_keyed_mut(key).unwrap();
-			}
-		}
-
 		self.tys.insert(ty)
 	}
 

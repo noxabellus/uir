@@ -1,3 +1,5 @@
+pub extern crate support;
+
 pub mod src;
 pub mod ty;
 pub mod cfg;
@@ -27,7 +29,7 @@ mod test {
 
 	#[test]
 	fn add () -> IrResult {
-		let mut context = Context::with_target(target::X64Linux);
+		let mut context = Context::with_target(target::AMD64);
 		let mut builder = Builder::new(&mut context);
 		let mut f = FunctionBuilder::new(&mut builder);
 
@@ -68,7 +70,7 @@ mod test {
 
 	#[test]
 	fn fib () -> IrResult {
-		let mut context = Context::with_target(target::X64Linux);
+		let mut context = Context::with_target(target::AMD64);
 		let mut builder = Builder::new(&mut context);
 		let mut f = FunctionBuilder::new(&mut builder);
 
