@@ -1,7 +1,9 @@
 use std::fmt;
 
-use llvm_sys::{LLVMTypeKind, core::*, prelude::*};
+use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, core::*, prelude::*};
 
+
+pub const LLVMOk: LLVMBool = 0;
 pub const LLVMFalse: LLVMBool = 0;
 pub const LLVMTrue: LLVMBool = 1;
 
@@ -110,6 +112,10 @@ impl fmt::Debug for LLVMValue {
 
 
 impl LLVMType {
+	pub fn of (value: impl Into<LLVMValueRef>) -> LLVMType {
+		unsafe { LLVMTypeOf(value.into()).into() }
+	}
+
 	pub fn kind (self) -> LLVMTypeKind {
 		unsafe { LLVMGetTypeKind(self.into()) }
 	}
@@ -118,45 +124,78 @@ impl LLVMType {
 		self.kind() == kind
 	}
 
-	pub fn is_void_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMVoidTypeKind) }
-	pub fn is_half_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMHalfTypeKind) }
-	pub fn is_float_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMFloatTypeKind) }
-	pub fn is_double_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMDoubleTypeKind) }
-	pub fn is_x86_fp80_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMX86_FP80TypeKind) }
-	pub fn is_fp128_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMFP128TypeKind) }
-	pub fn is_ppc_fp128_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMPPC_FP128TypeKind) }
-	pub fn is_label_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMLabelTypeKind) }
-	pub fn is_integer_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMIntegerTypeKind) }
-	pub fn is_function_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMFunctionTypeKind) }
-	pub fn is_struct_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMStructTypeKind) }
-	pub fn is_array_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMArrayTypeKind) }
-	pub fn is_pointer_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMPointerTypeKind) }
-	pub fn is_vector_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMVectorTypeKind) }
-	pub fn is_metadata_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMMetadataTypeKind) }
-	pub fn is_x86_mmx_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMX86_MMXTypeKind) }
-	pub fn is_token_kind (self) -> bool { self.is_kind(LLVMTypeKind::LLVMTokenTypeKind) }
+	pub fn is_void_kind (self) -> bool { self.is_kind(LLVMVoidTypeKind) }
+	pub fn is_half_kind (self) -> bool { self.is_kind(LLVMHalfTypeKind) }
+	pub fn is_float_kind (self) -> bool { self.is_kind(LLVMFloatTypeKind) }
+	pub fn is_double_kind (self) -> bool { self.is_kind(LLVMDoubleTypeKind) }
+	pub fn is_x86_fp80_kind (self) -> bool { self.is_kind(LLVMX86_FP80TypeKind) }
+	pub fn is_fp128_kind (self) -> bool { self.is_kind(LLVMFP128TypeKind) }
+	pub fn is_ppc_fp128_kind (self) -> bool { self.is_kind(LLVMPPC_FP128TypeKind) }
+	pub fn is_label_kind (self) -> bool { self.is_kind(LLVMLabelTypeKind) }
+	pub fn is_integer_kind (self) -> bool { self.is_kind(LLVMIntegerTypeKind) }
+	pub fn is_function_kind (self) -> bool { self.is_kind(LLVMFunctionTypeKind) }
+	pub fn is_struct_kind (self) -> bool { self.is_kind(LLVMStructTypeKind) }
+	pub fn is_array_kind (self) -> bool { self.is_kind(LLVMArrayTypeKind) }
+	pub fn is_pointer_kind (self) -> bool { self.is_kind(LLVMPointerTypeKind) }
+	pub fn is_vector_kind (self) -> bool { self.is_kind(LLVMVectorTypeKind) }
+	pub fn is_metadata_kind (self) -> bool { self.is_kind(LLVMMetadataTypeKind) }
+	pub fn is_x86_mmx_kind (self) -> bool { self.is_kind(LLVMX86_MMXTypeKind) }
+	pub fn is_token_kind (self) -> bool { self.is_kind(LLVMTokenTypeKind) }
 
+	#[track_caller]
+	pub fn get_address_space (self) -> u32 {
+		assert_eq!(self.kind(), LLVMPointerTypeKind);
 
+		unsafe { LLVMGetPointerAddressSpace(self.into()) }
+	}
+
+	#[track_caller]
+	pub fn count_param_types (self) -> u32 {
+		assert_eq!(self.kind(), LLVMFunctionTypeKind);
+
+		unsafe { LLVMCountParamTypes(self.into()) }
+	}
+
+	pub fn get_param_types (self) -> Box<[LLVMType]> {
+		let len = self.count_param_types();
+
+		let mut types = Vec::with_capacity(len as usize);
+		unsafe {
+			LLVMGetParamTypes(self.into(), types.as_mut_ptr());
+			types.set_len(len as usize);
+		}
+
+		types.into_iter().map(LLVMType).collect::<Box<_>>()
+	}
+
+	pub fn get_return_type (self) -> LLVMType {
+		unsafe { LLVMGetReturnType(self.into()).into() }
+	}
+
+	#[track_caller]
 	pub fn get_int_type_width (self) -> u32 {
-		assert_eq!(self.kind(), LLVMTypeKind::LLVMIntegerTypeKind);
+		assert_eq!(self.kind(), LLVMIntegerTypeKind);
 
 		unsafe { LLVMGetIntTypeWidth(self.into()) }
 	}
 
+	#[track_caller]
 	pub fn count_element_types (self) -> u32 {
-		assert_eq!(self.kind(), LLVMTypeKind::LLVMStructTypeKind);
+		assert_eq!(self.kind(), LLVMStructTypeKind);
 
 		unsafe { LLVMCountStructElementTypes(self.0) }
 	}
 
+	#[track_caller]
 	pub fn get_array_length (self) -> u32 {
-		assert_eq!(self.kind(), LLVMTypeKind::LLVMArrayTypeKind);
+		assert_eq!(self.kind(), LLVMArrayTypeKind);
 
 		unsafe { LLVMGetArrayLength(self.0) }
 	}
 
+	#[track_caller]
 	pub fn get_vector_size (self) -> u32 {
-		assert_eq!(self.kind(), LLVMTypeKind::LLVMVectorTypeKind);
+		assert_eq!(self.kind(), LLVMVectorTypeKind);
 
 		unsafe { LLVMGetVectorSize(self.0) }
 	}
@@ -166,15 +205,16 @@ impl LLVMType {
 	}
 
 	pub fn is_packed_struct (self) -> bool {
-		if self.kind() == LLVMTypeKind::LLVMStructTypeKind {
+		if self.kind() == LLVMStructTypeKind {
 			unsafe { LLVMIsPackedStruct(self.into()) != LLVMFalse }
 		} else {
 			false
 		}
 	}
 
+	#[track_caller]
 	pub fn get_element_type (self) -> LLVMType {
-		assert!(matches!(self.kind(), LLVMTypeKind::LLVMArrayTypeKind | LLVMTypeKind::LLVMVectorTypeKind));
+		assert!(matches!(self.kind(), LLVMArrayTypeKind | LLVMVectorTypeKind | LLVMPointerTypeKind));
 
 		unsafe { LLVMGetElementType(self.0).into() }
 	}
@@ -290,6 +330,10 @@ impl LLVMValue {
 
 	pub fn create_function (module: impl Into<LLVMModuleRef>, ty: impl Into<LLVMTypeRef>, name: impl Into<LLVMString>) -> LLVMValue {
 		unsafe { LLVMAddFunction(module.into(), name.into().as_ptr(), ty.into()).into() }
+	}
+
+	pub fn get_function (module: impl Into<LLVMModuleRef>, name: impl Into<LLVMString>) -> LLVMValue {
+		unsafe { LLVMGetNamedFunction(module.into(), name.into().as_ptr()).into() }
 	}
 
 	pub fn set_global_initializer (self, const_init: impl Into<LLVMValueRef>) {

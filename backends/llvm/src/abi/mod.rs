@@ -47,9 +47,9 @@ impl ArgAttr {
 			| NonNull
 			| NoCapture
 		) {
-			if cfg!(debug_assertions) {
-				eprintln!("Warning: {:?} does not support conversion to LLVM yet; returning None", self);
-			}
+			// if cfg!(debug_assertions) {
+				// eprintln!("Warning: {:?} does not support conversion to LLVM yet; returning None", self);
+			// }
 
 			None
 		} else {
