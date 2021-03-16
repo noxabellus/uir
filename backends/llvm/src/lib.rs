@@ -280,7 +280,7 @@ mod llvm_tests {
 	use uir_core::{ ir, builder, support::slotmap::AsKey};
 
 	#[test]
-	fn what_do () {
+	fn test_structs_i () {
 		let mut ctx = ir::Context::new();
 		let mut builder = builder::Builder::new(&mut ctx);
 
@@ -340,6 +340,72 @@ mod llvm_tests {
 
 			// TODO: implement proper attributes when llvm doesnt suck
 			// (f_b64, "declare void @f_b64(%u_b64_t* sret, %u_b64_t* byval(%u_b64_t) align 8)"),
+		] {
+			assert_eq!(dbg!(format!("{:?}", llty)), expect)
+		}
+	}
+
+	#[test]
+	fn test_structs_f () {
+		let mut ctx = ir::Context::new();
+		let mut builder = builder::Builder::new(&mut ctx);
+
+		let f32_t = builder.real32_ty().as_key();
+		let f64_t = builder.real64_ty().as_key();
+
+		let u_a32_t = builder.structure_ty(vec! [
+			f32_t, f32_t
+		]).unwrap().set_name("u_a32_t").as_key();
+
+		let u_a64_t = builder.structure_ty(vec! [
+			f64_t, f64_t
+		]).unwrap().set_name("u_a64_t").as_key();
+
+		let u_b32_t = builder.structure_ty(vec! [
+			f32_t, f32_t, f32_t, f32_t
+		]).unwrap().set_name("u_b32_t").as_key();
+
+		let u_b64_t = builder.structure_ty(vec! [
+			f64_t, f64_t, f64_t, f64_t
+		]).unwrap().set_name("u_b64_t").as_key();
+
+		let f_a32_t = builder.function_ty(vec![ u_a32_t ], Some(u_a32_t)).unwrap().as_key();
+		let f_a64_t = builder.function_ty(vec![ u_a64_t ], Some(u_a64_t)).unwrap().as_key();
+		let f_b32_t = builder.function_ty(vec![ u_b32_t ], Some(u_b32_t)).unwrap().as_key();
+		let f_b64_t = builder.function_ty(vec![ u_b64_t ], Some(u_b64_t)).unwrap().as_key();
+
+		let backend = LLVMBackend::new(&ctx).unwrap();
+
+		let ll_f_a32_t = backend.emit_ty(f_a32_t);
+		let ll_f_a64_t = backend.emit_ty(f_a64_t);
+		let ll_f_b32_t = backend.emit_ty(f_b32_t);
+		let ll_f_b64_t = backend.emit_ty(f_b64_t);
+
+		let f_a32_abi = backend.abi_info(f_a32_t).unwrap();
+		let f_a64_abi = backend.abi_info(f_a64_t).unwrap();
+		let f_b32_abi = backend.abi_info(f_b32_t).unwrap();
+		let f_b64_abi = backend.abi_info(f_b64_t).unwrap();
+
+		let f_a32 = LLVMValue::create_function(backend.llmod, ll_f_a32_t, "f_a32");
+		let f_a64 = LLVMValue::create_function(backend.llmod, ll_f_a64_t, "f_a64");
+		let f_b32 = LLVMValue::create_function(backend.llmod, ll_f_b32_t, "f_b32");
+		let f_b64 = LLVMValue::create_function(backend.llmod, ll_f_b64_t, "f_b64");
+
+		f_a32_abi.apply_attributes(backend.llctx, f_a32);
+		f_a64_abi.apply_attributes(backend.llctx, f_a64);
+		f_b32_abi.apply_attributes(backend.llctx, f_b32);
+		f_b64_abi.apply_attributes(backend.llctx, f_b64);
+
+
+
+		for &(llty, expect) in &[
+			(f_a32, "declare <2 x float> @f_a32(<2 x float>)"),
+			(f_a64, "declare { double, double } @f_a64(double, double)"),
+			(f_b32, "declare { <2 x float>, <2 x float> } @f_b32(<2 x float>, <2 x float>)"),
+			(f_b64, "declare void @f_b64(%u_b64_t*, %u_b64_t*)"),
+
+			// TODO: implement proper attributes when llvm doesnt suck
+			// (f_b64, "declare void @f_b64_t(%struct.u_b64_t* sret, %struct.u_b64_t* byval(%struct.u_b64_t) align 8)"),
 		] {
 			assert_eq!(dbg!(format!("{:?}", llty)), expect)
 		}

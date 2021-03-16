@@ -263,7 +263,7 @@ fn fixup (ty: LLVMType, cls: &mut [RegClass]) {
 			for i in 1..e {
 				if cls[i] != RegClass::SSEUp {
 					RegClass::all_mem(cls);
-					return;
+					break
 				}
 			}
 		} else {
@@ -277,7 +277,7 @@ fn fixup (ty: LLVMType, cls: &mut [RegClass]) {
 				| RegClass::Memory
 				| RegClass::X87Up => {
 					RegClass::all_mem(cls);
-					return
+					break
 				}
 
 				x @ RegClass::SSEUp => {
@@ -285,16 +285,16 @@ fn fixup (ty: LLVMType, cls: &mut [RegClass]) {
 				}
 
 				x if x.is_sse() => {
-					i += 1;
-					while i != e && cls[i] == RegClass::SSEUp {
+					loop {
 						i += 1;
+						if i >= e || cls[i] != RegClass::SSEUp { break }
 					}
 				}
 
 				RegClass::X87 => {
-					i += 1;
-					while i != e && cls[i] == RegClass::X87Up {
+					loop {
 						i += 1;
+						if i >= e || cls[i] != RegClass::X87Up { break }
 					}
 				}
 
@@ -339,9 +339,9 @@ fn llreg (ctx: LLVMContextRef, reg_classes: &[RegClass]) -> Vec<LLVMType> {
 			| RegClass::SSEInt64
 			=> {
 				let (elems_per_word, elem_type) = match reg_class {
-					RegClass::SSEFv => (2, LLVMType::float(ctx)),
-					RegClass::SSEDv => (1, LLVMType::double(ctx)),
-					RegClass::SSEInt8 => (8, LLVMType::int8(ctx)),
+					RegClass::SSEFv    => (2, LLVMType::float(ctx)),
+					RegClass::SSEDv    => (1, LLVMType::double(ctx)),
+					RegClass::SSEInt8  => (8, LLVMType::int8(ctx)),
 					RegClass::SSEInt16 => (4, LLVMType::int16(ctx)),
 					RegClass::SSEInt32 => (2, LLVMType::int32(ctx)),
 					RegClass::SSEInt64 => (1, LLVMType::int64(ctx)),
@@ -355,8 +355,9 @@ fn llreg (ctx: LLVMContextRef, reg_classes: &[RegClass]) -> Vec<LLVMType> {
 
 				i += vec_len as usize;
 
-				continue;
+				continue
 			}
+
 			RegClass::SSEFs => types.push(LLVMType::float(ctx)),
 			RegClass::SSEDs => types.push(LLVMType::double(ctx)),
 
@@ -453,38 +454,6 @@ fn classify_with (ty: LLVMType, cls: &mut [RegClass], ix: u32, off: u32) {
 	}
 }
 
-fn compute_arg_types (arg_types: &[LLVMType]) -> Vec<Arg> {
-	arg_types.iter().map(|&ty| {
-		if ty.is_struct_kind() {
-			if size_of(ty) == 0 {
-				Arg::ignore(ty)
-			} else {
-				Arg::indirect(ty, ArgAttr::ByVal)
-			}
-		} else {
-			Arg::direct_attr(ty, zext_attr(ty))
-		}
-	}).collect()
-}
-
-fn compute_return_type (ctx: LLVMContextRef, return_type: Option<LLVMType>) -> Arg {
-	let return_type =  if let Some(t) = return_type { t } else {
-		return Arg::direct(LLVMType::void(ctx))
-	};
-
-	if return_type.is_struct_kind() {
-		match size_of(return_type) {
-			1 => Arg::direct_cast(return_type, vec![LLVMType::int8(ctx)]),
-			2 => Arg::direct_cast(return_type, vec![LLVMType::int16(ctx)]),
-			4 => Arg::direct_cast(return_type, vec![LLVMType::int32(ctx)]),
-			8 => Arg::direct_cast(return_type, vec![LLVMType::int64(ctx)]),
-
-			_ => Arg::indirect(return_type, ArgAttr::SRet)
-		}
-	} else {
-		Arg::direct_attr(return_type, zext_attr(return_type))
-	}
-}
 
 
 
