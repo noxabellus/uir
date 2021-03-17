@@ -1,9 +1,7 @@
-use super::wrapper::*;
+use crate::wrapper::*;
 
 use std::any::{ TypeId };
 use uir_core::target::{self, Target};
-
-use llvm_sys::{ core::*, prelude::* };
 
 
 mod amd64;
@@ -15,11 +13,11 @@ pub enum ArgAttr {
 	SRet,
 	ZExt,
 	ByVal,
-	ByRef,
-	Preallocated,
-	NoAlias,
-	NonNull,
-	NoCapture,
+	// ByRef,
+	// Preallocated,
+	// NoAlias,
+	// NonNull,
+	// NoCapture,
 }
 
 impl ArgAttr {
@@ -29,11 +27,11 @@ impl ArgAttr {
 			SRet => "sret\0",
 			ZExt => "zext\0",
 			ByVal => "byval\0",
-			ByRef => "byref\0",
-			Preallocated => "preallocated\0",
-			NoAlias => "noalias\0",
-			NonNull => "nonnull\0",
-			NoCapture => "nocapture\0",
+			// ByRef => "byref\0",
+			// Preallocated => "preallocated\0",
+			// NoAlias => "noalias\0",
+			// NonNull => "nonnull\0",
+			// NoCapture => "nocapture\0",
 		} as *const _ as *const _) }
 	}
 
@@ -43,9 +41,9 @@ impl ArgAttr {
 			  SRet
 			| ZExt
 			| ByVal
-			| NoAlias
-			| NonNull
-			| NoCapture
+			// | NoAlias
+			// | NonNull
+			// | NoCapture
 		) {
 			// if cfg!(debug_assertions) {
 				// eprintln!("Warning: {:?} does not support conversion to LLVM yet; returning None", self);
@@ -70,7 +68,7 @@ impl ArgAttr {
 pub enum ArgKind {
 	Direct,
 	Indirect,
-	Ignore,
+	// Ignore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -78,29 +76,29 @@ pub struct Arg {
 	pub kind: ArgKind,
 	pub base_type: LLVMType,
 	pub cast_types: Vec<LLVMType>,
-	pub pad_type: Option<LLVMType>,
+	// pub pad_type: Option<LLVMType>,
 	pub attribute: Option<ArgAttr>,
 }
 
 impl Arg {
-	fn direct_custom (base_type: LLVMType, cast_types: Vec<LLVMType>, pad_type: Option<LLVMType>, attribute: Option<ArgAttr>) -> Self {
+	fn direct_custom (base_type: LLVMType, cast_types: Vec<LLVMType>, attribute: Option<ArgAttr>) -> Self {
 		Self {
 			kind: ArgKind::Direct,
-			base_type, cast_types, pad_type,
+			base_type, cast_types,
 			attribute
 		}
 	}
 
 	fn direct_cast (base_type: LLVMType, cast_types: Vec<LLVMType>) -> Self {
-		Self::direct_custom(base_type, cast_types, None, None)
+		Self::direct_custom(base_type, cast_types, None)
 	}
 
 	fn direct_attr (base_type: LLVMType, attribute: Option<ArgAttr>) -> Self {
-		Self::direct_custom(base_type, vec![], None, attribute)
+		Self::direct_custom(base_type, vec![], attribute)
 	}
 
 	fn direct (base_type: LLVMType) -> Self {
-		Self::direct_custom(base_type, vec![], None, None)
+		Self::direct_custom(base_type, vec![], None)
 	}
 
 
@@ -109,32 +107,30 @@ impl Arg {
 			kind: ArgKind::Indirect,
 			base_type,
 			cast_types: vec![],
-			pad_type: None,
 			attribute: Some(attribute)
 		}
 	}
 
-	fn ignore (base_type: LLVMType) -> Self {
-		Self {
-			kind: ArgKind::Ignore,
-			base_type,
-			cast_types: vec![],
-			pad_type: None,
-			attribute: None
-		}
-	}
+	// fn ignore (base_type: LLVMType) -> Self {
+	// 	Self {
+	// 		kind: ArgKind::Ignore,
+	// 		base_type,
+	// 		cast_types: vec![],
+	// 		attribute: None
+	// 	}
+	// }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Function {
 	pub args: Vec<Arg>,
 	pub result: Arg,
-	pub ty: LLVMType
+	pub lltype: LLVMType
 }
 
 impl Function {
-	pub fn from_data (ctx: LLVMContextRef, args: Vec<Arg>, result: Arg, is_var_args: bool) -> Self {
-		if is_var_args { todo!() }
+	pub fn from_data (ctx: LLVMContextRef, args: Vec<Arg>, result: Arg) -> Self {
+		// if is_var_args { todo!() }
 
 		let mut llargs = Vec::default();
 
@@ -154,9 +150,9 @@ impl Function {
 				LLVMType::void(ctx)
 			}
 
-			ArgKind::Ignore => {
-				LLVMType::void(ctx)
-			}
+			// ArgKind::Ignore => {
+			// 	LLVMType::void(ctx)
+			// }
 		};
 
 		for arg in args.iter() {
@@ -177,16 +173,16 @@ impl Function {
 					llargs.push(arg.base_type.as_pointer(0));
 				}
 
-				ArgKind::Ignore => {
-					continue
-				}
+				// ArgKind::Ignore => {
+				// 	continue
+				// }
 			}
 		}
 
 		Self {
 			args,
 			result,
-			ty: LLVMType::function(llargs.as_slice(), ret, is_var_args)
+			lltype: LLVMType::function(llargs.as_slice(), ret, false)
 		}
 	}
 
@@ -194,18 +190,17 @@ impl Function {
 		let offset: u32 = if self.result.kind == ArgKind::Indirect { 1 } else { 0 };
 
 		for (i, arg) in self.args.iter().enumerate() {
-			if arg.kind == ArgKind::Ignore { continue }
+			// if arg.kind == ArgKind::Ignore { continue }
 
 			if let Some(attribute) = arg.attribute {
 				attribute.apply(ctx, func, i as u32 + offset + 1);
 			}
 		}
 
-		if offset != 0
-		&& self.result.kind == ArgKind::Indirect {
+		if offset != 0 {
 			if let Some(attribute) = self.result.attribute {
 				attribute.apply(ctx, func, offset);
-				ArgAttr::NoAlias.apply(ctx, func, offset);
+				// TODO: ArgAttr::NoAlias.apply(ctx, func, offset);
 			}
 		}
 
@@ -219,16 +214,16 @@ impl Function {
 
 
 pub trait Abi: Target {
-	fn get_info (&self, context: LLVMContextRef, args: &[LLVMType], ret_ty: Option<LLVMType>, is_var_args: bool) -> Function;
+	fn get_info (&self, context: LLVMContextRef, args: &[LLVMType], ret_ty: LLVMType) -> Function;
 }
 
-pub fn get_abi (t: &dyn Target) -> Option<&dyn Abi> {
+pub fn get_abi (t: &dyn Target) -> Option<Box<dyn Abi>> {
 	macro_rules! conversions {
 		($( $ty:ident ),* $(,)?) => {
 			Some(match t.type_id() {
 				$(
 					id if id == TypeId::of::<target::$ty>()
-					=> unsafe { &*(t as *const dyn Target as *const target::$ty) }
+					=> unsafe { Box::new(*(t as *const dyn Target as *const target::$ty)) as Box<dyn Abi + 'static> }
 				)*
 
 				_ => return None

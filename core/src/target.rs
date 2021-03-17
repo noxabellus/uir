@@ -17,7 +17,7 @@ pub trait Target: fmt::Debug + Any {
 
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct AMD64;
 
 impl Target for AMD64 {

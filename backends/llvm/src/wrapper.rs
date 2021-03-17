@@ -1,57 +1,61 @@
 use std::fmt;
 
-use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, core::*, prelude::*};
+pub use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, core::*, prelude::*};
 
 
 pub const LLVMOk: LLVMBool = 0;
 pub const LLVMFalse: LLVMBool = 0;
 pub const LLVMTrue: LLVMBool = 1;
 
-#[derive(Default)]
+
 pub struct LLVMString {
-    bytes: Vec<u8>,
+	bytes: Vec<u8>,
+}
+
+impl Default for LLVMString {
+	fn default () -> Self { Self::from("") }
 }
 
 impl From<String> for LLVMString {
-    fn from(s: String) -> LLVMString {
-        let mut bytes = s.into_bytes();
+	fn from(s: String) -> LLVMString {
+		let mut bytes = s.into_bytes();
 
-        for &byte in bytes.iter() {
-            assert_ne!(byte, 0);
-        }
+		for &byte in bytes.iter() {
+			assert_ne!(byte, 0);
+		}
 
-        bytes.push(0);
+		bytes.push(0);
 
-        Self { bytes }
-    }
+		Self { bytes }
+	}
 }
 
 impl From<&str> for LLVMString {
-    fn from(s: &str) -> LLVMString {
-        Self::from(s.to_owned())
-    }
+	fn from(s: &str) -> LLVMString {
+		Self::from(s.to_owned())
+	}
 }
 
 impl From<&String> for LLVMString {
-    fn from(s: &String) -> LLVMString {
-        Self::from(s.to_owned())
-    }
+	fn from(s: &String) -> LLVMString {
+		Self::from(s.to_owned())
+	}
 }
 
 impl LLVMString {
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.bytes
-    }
+	pub fn into_bytes(self) -> Vec<u8> {
+		self.bytes
+	}
 
-    pub fn as_ptr(&self) -> *const i8 {
-        self.bytes.as_ptr() as *const i8
-    }
+	pub fn as_ptr(&self) -> *const i8 {
+		self.bytes.as_ptr() as *const i8
+	}
 }
 
 macro_rules! llvm_str {
-    ($str:literal) => {
-        concat!($str, "\0") as *const str as *const i8
-    };
+	($str:literal) => {
+		concat!($str, "\0") as *const str as *const i8
+	};
 }
 
 #[repr(transparent)]
@@ -63,25 +67,99 @@ pub struct LLVMType(LLVMTypeRef);
 pub struct LLVMValue(LLVMValueRef);
 
 impl From<LLVMTypeRef> for LLVMType {
-    fn from(r: LLVMTypeRef) -> LLVMType {
-        Self(r)
-    }
+	fn from(r: LLVMTypeRef) -> LLVMType {
+		Self(r)
+	}
 }
 impl From<LLVMType> for LLVMTypeRef {
-    fn from(r: LLVMType) -> LLVMTypeRef {
-        r.0
-    }
+	fn from(r: LLVMType) -> LLVMTypeRef {
+		r.0
+	}
 }
 
 impl From<LLVMValueRef> for LLVMValue {
-    fn from(r: LLVMValueRef) -> LLVMValue {
-        Self(r)
-    }
+	fn from(r: LLVMValueRef) -> LLVMValue {
+		Self(r)
+	}
 }
 impl From<LLVMValue> for LLVMValueRef {
-    fn from(r: LLVMValue) -> LLVMValueRef {
-        r.0
-    }
+	fn from(r: LLVMValue) -> LLVMValueRef {
+		r.0
+	}
+}
+
+impl fmt::Display for LLVMType {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self.kind() {
+			LLVMVoidTypeKind => write!(f, "Void"),
+			LLVMLabelTypeKind => write!(f, "Label"),
+			LLVMMetadataTypeKind => write!(f, "Metadata"),
+			LLVMHalfTypeKind => write!(f, "Half"),
+			LLVMFloatTypeKind => write!(f, "Float"),
+			LLVMDoubleTypeKind => write!(f, "Double"),
+			LLVMTokenTypeKind => write!(f, "Token"),
+			LLVMFP128TypeKind => write!(f, "FP128"),
+			LLVMX86_FP80TypeKind => write!(f, "X86_FP80"),
+			LLVMPPC_FP128TypeKind => write!(f, "PPC_FP128"),
+			LLVMX86_MMXTypeKind => write!(f, "X86_MMX"),
+
+			LLVMIntegerTypeKind
+			=> {
+				let s = self.get_int_type_width();
+				write!(f, "i{}", s)
+			}
+
+			LLVMPointerTypeKind
+			=> {
+				let a = self.get_address_space();
+				let e = self.get_element_type();
+				write!(f, "*{} {}", a, e)
+			}
+
+			LLVMArrayTypeKind
+			=> {
+				let l = self.get_array_length();
+				let e = self.get_element_type();
+				write!(f, "[{}] {}", l, e)
+			}
+
+			LLVMVectorTypeKind
+			=> {
+				let l = self.get_vector_size();
+				let a = self.get_element_type();
+				write!(f, "<{}> {}", l, a)
+			}
+
+			LLVMStructTypeKind => {
+				write!(f, "{{ ")?;
+
+				let l = self.count_element_types();
+				for i in 0..l {
+					let e = self.get_type_at_index(i);
+					write!(f, "{}", e)?;
+
+					if i < l - 1 { write!(f, ", ")? }
+				}
+
+				write!(f, " }}")
+			}
+
+			LLVMFunctionTypeKind => {
+				let r = self.get_return_type();
+				write!(f, "{} (", r)?;
+
+				let p = self.get_param_types();
+				let mut i = p.iter().peekable();
+				while let Some(p) = i.next() {
+					write!(f, "{}", p)?;
+
+					if i.peek().is_some() { write!(f, ", ")? }
+				}
+
+				write!(f, ")")
+			}
+		}
+	}
 }
 
 impl fmt::Debug for LLVMType {

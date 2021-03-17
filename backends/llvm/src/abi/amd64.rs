@@ -3,25 +3,24 @@ use uir_core::{
 	target::{ AMD64 },
 };
 
-use llvm_sys::{ LLVMTypeKind::*, prelude::* };
-
 use super::{Abi, Arg, ArgAttr, Function};
 use crate::wrapper::*;
 
 
 
 impl Abi for AMD64 {
-	fn get_info (&self, ctx: LLVMContextRef, arg_types: &[LLVMType], return_type: Option<LLVMType>, is_var_args: bool, /*ProcCallingConvention calling_convention*/ ) -> Function {
+	fn get_info (&self, ctx: LLVMContextRef, arg_types: &[LLVMType], return_type: LLVMType/*, is_var_args: bool, ProcCallingConvention calling_convention*/ ) -> Function {
 		// f.calling_convention = calling_convention;
 
 		let args = arg_types.iter().copied().map(|ty| amd64_type(ctx, ty, ByVal)).collect::<Vec<_>>();
 
-		let result = return_type.map_or_else(
-			|| Arg::direct(LLVMType::void(ctx)),
-			|rt| amd64_type(ctx, rt, SRet)
-		);
+		let result = if return_type.is_void_kind() {
+			Arg::direct(return_type)
+		} else {
+			amd64_type(ctx, return_type, SRet)
+		};
 
-		Function::from_data(ctx, args, result, is_var_args)
+		Function::from_data(ctx, args, result)
 	}
 }
 
@@ -215,7 +214,7 @@ fn amd64_type (ctx: LLVMContextRef, ty: LLVMType, indirect_attribute: ArgAttr) -
 		if is_mem_cls(cls.as_slice(), indirect_attribute) {
 			Arg::indirect(ty, indirect_attribute)
 		} else {
-			Arg::direct_custom(ty, llreg(ctx, cls.as_slice()), None, None)
+			Arg::direct_cast(ty, llreg(ctx, cls.as_slice()))
 		}
 	}
 }

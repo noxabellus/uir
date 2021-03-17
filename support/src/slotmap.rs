@@ -3,7 +3,15 @@ use std::{collections::HashMap, hash::Hash, ops, slice, vec};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Copy)]
 pub struct KeyData(u32, u32);
-pub trait Key: Copy + Eq + Hash + Into<KeyData> + From<KeyData> { }
+impl From<KeyData> for u64 {
+	fn from (KeyData(a, b): KeyData) -> Self {
+		((a as u64) << 32) | (b as u64)
+	}
+}
+pub trait Key: Copy + Eq + Hash + Into<KeyData> + From<KeyData> {
+	fn as_keydata (self) -> KeyData { self.into() }
+	fn as_integer (self) -> u64 { self.as_keydata().into() }
+}
 impl<T> Key for T where T: Copy + Eq + Hash + Into<KeyData> + From<KeyData> { }
 
 pub trait AsKey<K: Key> {

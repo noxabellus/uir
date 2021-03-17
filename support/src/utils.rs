@@ -1,4 +1,4 @@
-use std::{cell::Ref, ops::Deref};
+use std::{cell::{Ref, RefMut}, ops::{Deref, DerefMut}};
 
 pub fn flip_ref_opt_to_opt_ref<T> (r: Ref<Option<T>>) -> Option<Ref<T>> {
 	match r.deref() {
@@ -13,14 +13,64 @@ pub fn ref_and_then<'r, T, U: 'static, F: FnOnce (&T) -> Option<&U>> (r: Ref<'r,
 		Some(u) => {
 			// SAFETY: we're discarding the compile-time managed borrow in the reference,
 			// in favor of the runtime-managed borrow in the Ref
-			let u = unsafe { std::mem::transmute::<&U, &'static U>(u) };
+			let u = unsafe { std::mem::transmute::<_, &'static U>(u) };
 
-			Some(Ref::map(r, |_| u))
+			Some(Ref::map(r, move |_| u))
 		}
 
 		None => None
 	}
 }
+
+pub trait RefAndThen<'r> {
+	type Inner;
+	fn and_then<U: 'static, F: FnOnce (&Self::Inner) -> Option<&U>> (self, f: F) -> Option<Ref<'r, U>>;
+	fn map<U: 'static, F: FnOnce (&Self::Inner) -> &U> (self, f: F) -> Ref<'r, U>;
+}
+
+impl<'r, T> RefAndThen<'r> for Ref<'r, T> {
+	type Inner = T;
+	fn and_then<U: 'static, F: FnOnce (&Self::Inner) -> Option<&U>> (self, f: F) -> Option<Ref<'r, U>> {
+		ref_and_then(self, f)
+	}
+
+	fn map<U: 'static, F: FnOnce (&Self::Inner) -> &U> (self, f: F) -> Ref<'r, U> {
+		Ref::map(self, f)
+	}
+}
+
+
+pub fn ref_and_then_mut<'r, T, U: 'static, F: FnOnce (&mut T) -> Option<&mut U>> (mut r: RefMut<'r, T>, f: F) -> Option<RefMut<'r, U>> {
+	match f(r.deref_mut()) {
+		Some(u) => {
+			// SAFETY: we're discarding the compile-time managed borrow in the reference,
+			// in favor of the runtime-managed borrow in the Ref
+			let u = unsafe { std::mem::transmute::<&mut U, &'static mut U>(u) };
+
+			Some(RefMut::map(r, move |_| u))
+		}
+
+		None => None
+	}
+}
+
+pub trait RefAndThenMut<'r> {
+	type Inner;
+	fn and_then_mut<U: 'static, F: FnOnce (&mut Self::Inner) -> Option<&mut U>> (self, f: F) -> Option<RefMut<'r, U>>;
+	fn map_mut<U: 'static, F: FnOnce (&mut Self::Inner) -> &mut U> (self, f: F) -> RefMut<'r, U>;
+}
+
+impl<'r, T> RefAndThenMut<'r> for RefMut<'r, T> {
+	type Inner = T;
+	fn and_then_mut <U: 'static, F: FnOnce (&mut Self::Inner) -> Option<&mut U>> (self, f: F) -> Option<RefMut<'r, U>> {
+		ref_and_then_mut(self, f)
+	}
+
+	fn map_mut<U: 'static, F: FnOnce (&mut Self::Inner) -> &mut U> (self, f: F) -> RefMut<'r, U> {
+		RefMut::map(self, f)
+	}
+}
+
 
 pub fn assert<E> (cond: bool, err: E) -> Result<(), E> {
 	if cond {
