@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, core::*, prelude::*};
+pub use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, LLVMValueKind, LLVMValueKind::*, core::*, prelude::*};
 
 
 pub const LLVMOk: LLVMBool = 0;
@@ -27,6 +27,17 @@ impl From<String> for LLVMString {
 		bytes.push(0);
 
 		Self { bytes }
+	}
+}
+
+impl From<*const i8> for LLVMString {
+	fn from(s: *const i8) -> LLVMString {
+		unsafe {
+			let strlen = |p: *const i8| -> usize { let mut len = 0; while *p.add(len) != 0 { len += 1; } len };
+			let bytes = std::slice::from_raw_parts(s as _, strlen(s));
+
+			std::str::from_utf8_unchecked(bytes).into()
+		}
 	}
 }
 
@@ -61,10 +72,18 @@ macro_rules! llvm_str {
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LLVMType(LLVMTypeRef);
+// impl Default for LLVMType { fn default () -> Self { Self(std::ptr::null_mut()) } }
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LLVMValue(LLVMValueRef);
+// impl Default for LLVMValue { fn default () -> Self { Self(std::ptr::null_mut()) } }
+
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LLVMBlock(LLVMBasicBlockRef);
+// impl Default for LLVMBlock { fn default () -> Self { Self(std::ptr::null_mut()) } }
 
 impl From<LLVMTypeRef> for LLVMType {
 	fn from(r: LLVMTypeRef) -> LLVMType {
@@ -84,6 +103,17 @@ impl From<LLVMValueRef> for LLVMValue {
 }
 impl From<LLVMValue> for LLVMValueRef {
 	fn from(r: LLVMValue) -> LLVMValueRef {
+		r.0
+	}
+}
+
+impl From<LLVMBasicBlockRef> for LLVMBlock {
+	fn from(r: LLVMBasicBlockRef) -> LLVMBlock {
+		Self(r)
+	}
+}
+impl From<LLVMBlock> for LLVMBasicBlockRef {
+	fn from(r: LLVMBlock) -> LLVMBasicBlockRef {
 		r.0
 	}
 }
@@ -234,7 +264,7 @@ impl LLVMType {
 		unsafe { LLVMCountParamTypes(self.into()) }
 	}
 
-	pub fn get_param_types (self) -> Box<[LLVMType]> {
+	pub fn get_param_types (self) -> Vec<LLVMType> {
 		let len = self.count_param_types();
 
 		let mut types = Vec::with_capacity(len as usize);
@@ -243,7 +273,7 @@ impl LLVMType {
 			types.set_len(len as usize);
 		}
 
-		types.into_iter().map(LLVMType).collect::<Box<_>>()
+		types.into_iter().map(LLVMType).collect()
 	}
 
 	pub fn get_return_type (self) -> LLVMType {
@@ -305,48 +335,48 @@ impl LLVMType {
 		Self::array(self, length)
 	}
 
-	pub fn int (context: LLVMContextRef, bits: u32) -> LLVMType {
-		unsafe { LLVMIntTypeInContext(context, bits).into() }
+	pub fn int (ctx: LLVMContextRef, bits: u32) -> LLVMType {
+		unsafe { LLVMIntTypeInContext(ctx, bits).into() }
 	}
 
-	pub fn int1 (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMInt1TypeInContext(context).into() }
+	pub fn int1 (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMInt1TypeInContext(ctx).into() }
 	}
 
-	pub fn int8 (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMInt8TypeInContext(context).into() }
+	pub fn int8 (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMInt8TypeInContext(ctx).into() }
 	}
 
-	pub fn int16 (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMInt16TypeInContext(context).into() }
+	pub fn int16 (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMInt16TypeInContext(ctx).into() }
 	}
 
-	pub fn int32 (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMInt32TypeInContext(context).into() }
+	pub fn int32 (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMInt32TypeInContext(ctx).into() }
 	}
 
-	pub fn int64 (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMInt64TypeInContext(context).into() }
+	pub fn int64 (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMInt64TypeInContext(ctx).into() }
 	}
 
-	pub fn int128 (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMInt128TypeInContext(context).into() }
+	pub fn int128 (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMInt128TypeInContext(ctx).into() }
 	}
 
-	pub fn float (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMFloatTypeInContext(context).into() }
+	pub fn float (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMFloatTypeInContext(ctx).into() }
 	}
 
-	pub fn double (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMDoubleTypeInContext(context).into() }
+	pub fn double (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMDoubleTypeInContext(ctx).into() }
 	}
 
-	pub fn void (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMVoidTypeInContext(context).into() }
+	pub fn void (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMVoidTypeInContext(ctx).into() }
 	}
 
-	pub fn label (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMLabelTypeInContext(context).into() }
+	pub fn label (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMLabelTypeInContext(ctx).into() }
 	}
 
 	pub fn pointer (target_ty: LLVMType, address_space: u32) -> LLVMType {
@@ -365,26 +395,26 @@ impl LLVMType {
 		unsafe { LLVMVectorType(element_ty.into(), length).into() }
 	}
 
-	pub fn named_empty_structure (context: LLVMContextRef, name: impl Into<LLVMString>) -> LLVMType {
-		unsafe { LLVMStructCreateNamed(context, name.into().as_ptr()).into() }
+	pub fn named_empty_structure (ctx: LLVMContextRef, name: impl Into<LLVMString>) -> LLVMType {
+		unsafe { LLVMStructCreateNamed(ctx, name.into().as_ptr()).into() }
 	}
 
-	pub fn anonymous_empty_structure (context: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMStructTypeInContext(context, std::ptr::null_mut(), 0, LLVMFalse).into() }
+	pub fn anonymous_empty_structure (ctx: LLVMContextRef) -> LLVMType {
+		unsafe { LLVMStructTypeInContext(ctx, std::ptr::null_mut(), 0, LLVMFalse).into() }
 	}
 
 	pub fn structure_set_body (self, field_tys: &[LLVMType], packed: bool) {
 		unsafe { LLVMStructSetBody(self.into(), field_tys.as_ptr() as *mut _, field_tys.len() as _, packed as _) }
 	}
 
-	pub fn named_structure (context: LLVMContextRef, name: impl Into<LLVMString>, field_tys: &[LLVMType], packed: bool) -> LLVMType {
-		let llt = LLVMType::named_empty_structure(context, name);
+	pub fn named_structure (ctx: LLVMContextRef, name: impl Into<LLVMString>, field_tys: &[LLVMType], packed: bool) -> LLVMType {
+		let llt = LLVMType::named_empty_structure(ctx, name);
 		llt.structure_set_body(field_tys, packed);
 		llt
 	}
 
-	pub fn anonymous_structure (context: LLVMContextRef, field_tys: &[LLVMType], packed: bool) -> LLVMType {
-		unsafe { LLVMStructTypeInContext(context, field_tys.as_ptr() as *const _ as *mut _, field_tys.len() as _, packed as _).into() }
+	pub fn anonymous_structure (ctx: LLVMContextRef, field_tys: &[LLVMType], packed: bool) -> LLVMType {
+		unsafe { LLVMStructTypeInContext(ctx, field_tys.as_ptr() as *const _ as *mut _, field_tys.len() as _, packed as _).into() }
 	}
 }
 
@@ -416,5 +446,160 @@ impl LLVMValue {
 
 	pub fn set_global_initializer (self, const_init: impl Into<LLVMValueRef>) {
 		unsafe { LLVMSetInitializer(self.into(), const_init.into()) }
+	}
+
+	pub fn kind (self) -> LLVMValueKind {
+		unsafe { LLVMGetValueKind(self.into()) }
+	}
+
+	pub fn is_kind (self, kind: LLVMValueKind) -> bool {
+		self.kind() == kind
+	}
+
+	pub fn is_argument_kind (self) -> bool { self.is_kind(LLVMArgumentValueKind) }
+	pub fn is_basic_block_kind (self) -> bool { self.is_kind(LLVMBasicBlockValueKind) }
+	pub fn is_memory_use_kind (self) -> bool { self.is_kind(LLVMMemoryUseValueKind) }
+	pub fn is_memory_def_kind (self) -> bool { self.is_kind(LLVMMemoryDefValueKind) }
+	pub fn is_memory_phi_kind (self) -> bool { self.is_kind(LLVMMemoryPhiValueKind) }
+
+	pub fn is_function_kind (self) -> bool { self.is_kind(LLVMFunctionValueKind) }
+	pub fn is_global_alias_kind (self) -> bool { self.is_kind(LLVMGlobalAliasValueKind) }
+	pub fn is_global_ifunc_kind (self) -> bool { self.is_kind(LLVMGlobalIFuncValueKind) }
+	pub fn is_global_variable_kind (self) -> bool { self.is_kind(LLVMGlobalVariableValueKind) }
+	pub fn is_block_address_kind (self) -> bool { self.is_kind(LLVMBlockAddressValueKind) }
+	pub fn is_constant_expr_kind (self) -> bool { self.is_kind(LLVMConstantExprValueKind) }
+	pub fn is_constant_array_kind (self) -> bool { self.is_kind(LLVMConstantArrayValueKind) }
+	pub fn is_constant_struct_kind (self) -> bool { self.is_kind(LLVMConstantStructValueKind) }
+	pub fn is_constant_vector_kind (self) -> bool { self.is_kind(LLVMConstantVectorValueKind) }
+	pub fn is_undef_value_kind (self) -> bool { self.is_kind(LLVMUndefValueValueKind) }
+	pub fn is_constant_aggregate_zero_kind (self) -> bool { self.is_kind(LLVMConstantAggregateZeroValueKind) }
+	pub fn is_constant_data_array_kind (self) -> bool { self.is_kind(LLVMConstantDataArrayValueKind) }
+	pub fn is_constant_data_vector_kind (self) -> bool { self.is_kind(LLVMConstantDataVectorValueKind) }
+	pub fn is_constant_int_kind (self) -> bool { self.is_kind(LLVMConstantIntValueKind) }
+	pub fn is_constant_fp_kind (self) -> bool { self.is_kind(LLVMConstantFPValueKind) }
+	pub fn is_constant_pointer_null_kind (self) -> bool { self.is_kind(LLVMConstantPointerNullValueKind) }
+	pub fn is_constant_token_none_kind (self) -> bool { self.is_kind(LLVMConstantTokenNoneValueKind) }
+
+	pub fn is_metadata_as_value_kind (self) -> bool { self.is_kind(LLVMMetadataAsValueValueKind) }
+	pub fn is_inline_asm_kind (self) -> bool { self.is_kind(LLVMInlineAsmValueKind) }
+
+	pub fn is_instruction_kind (self) -> bool { self.is_kind(LLVMInstructionValueKind) }
+
+	pub fn count_params (self) -> u32 {
+		assert!(self.is_function_kind());
+
+		unsafe { LLVMCountParams(self.into()) }
+	}
+
+	pub fn get_params (self) -> Vec<LLVMValue> {
+		let len = self.count_params() as usize;
+
+		let mut buf = Vec::with_capacity(len);
+		unsafe {
+			LLVMGetParams(self.into(), buf.as_mut_ptr() as _);
+			buf.set_len(len);
+		}
+
+		buf
+	}
+}
+
+
+
+pub struct LLVM {
+	pub ctx: LLVMContextRef,
+	pub module: LLVMModuleRef,
+	pub builder: LLVMBuilderRef,
+}
+
+impl LLVM {
+	pub fn new (module_name: impl Into<LLVMString>) -> Self {
+		unsafe {
+			let ctx = LLVMContextCreate();
+			let module = LLVMModuleCreateWithNameInContext(module_name.into().as_ptr(), ctx);
+			let builder = LLVMCreateBuilderInContext(ctx);
+
+			Self {
+				ctx,
+				module,
+				builder
+			}
+		}
+	}
+
+
+	pub fn append_basic_block (&self, function: impl Into<LLVMValueRef>, name: Option<impl Into<LLVMString>>) -> LLVMBlock {
+		unsafe { LLVMAppendBasicBlockInContext(self.ctx, function.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn position_at_end (&self, bb: impl Into<LLVMBasicBlockRef>) {
+		unsafe { LLVMPositionBuilderAtEnd(self.builder, bb.into()) }
+	}
+
+
+	pub fn ret (&self, ret_val: impl Into<LLVMValueRef>) -> LLVMValue {
+		unsafe { LLVMBuildRet(self.builder, ret_val.into()).into() }
+	}
+
+
+	pub fn ret_void (&self) -> LLVMValue {
+		unsafe { LLVMBuildRetVoid(self.builder).into() }
+	}
+
+
+	pub fn insert_value (&self, agg: Option<impl Into<LLVMValueRef>>, new_field: impl Into<LLVMValueRef>, idx: u32, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildInsertValue(self.builder, agg.map(Into::into).unwrap_or_else(std::ptr::null_mut), new_field.into(), idx, name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn extract_value (&self, llval: LLVMValue, idx: u32, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildExtractValue(self.builder, llval.into(), idx, name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn trunc_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildTruncOrBitCast(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn zext_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildZExtOrBitCast(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn load (&self, llptr: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildLoad(self.builder, llptr.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn store (&self, llval: LLVMValue, llptr: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildStore(self.builder, llval.into(), llptr.into()).into() }
+	}
+
+	pub fn call (&self, lltype: LLVMType, func: LLVMValue, args: &[LLVMValue], name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe {
+			LLVMBuildCall2(
+				self.builder,
+				lltype.into(), func.into(),
+				args.as_ptr() as _, args.len() as _,
+				name.map(Into::into).unwrap_or_default().as_ptr()
+			).into()
+		}
+	}
+
+	pub fn alloca (&self, lltype: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildAlloca(
+			self.builder,
+			lltype.into(),
+			name
+				.map(Into::into)
+				.unwrap_or_default()
+				.as_ptr()
+		).into() }
+	}
+}
+
+impl Drop for LLVM {
+	fn drop (&mut self) {
+		unsafe {
+			LLVMDisposeBuilder(self.builder);
+			LLVMDisposeModule(self.module);
+			LLVMContextDispose(self.ctx);
+		}
 	}
 }

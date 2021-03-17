@@ -1,13 +1,13 @@
 #![allow(non_upper_case_globals, dead_code)]
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::HashMap };
+use std::{cell::{Ref, RefCell, RefMut}, collections::HashMap, ops};
 
 
 #[macro_use]
 pub(crate) mod wrapper;
 pub(crate) mod abi;
 
-use abi::{Abi, Arg, ArgAttr, ArgKind};
+use abi::{Abi, ArgAttr, ArgKind};
 
 use uir_core::{ir::*, support::{slotmap::KeyData, stack::Stack, utils::RefAndThen}, ty::*};
 
@@ -22,20 +22,35 @@ pub struct LLVMMutableState {
 	pub target_signature_types: HashMap<LLVMType, abi::Function>,
 	pub stack: Stack<StackVal>,
 	pub active_fn: Option<(LLVMValue, FunctionKey)>,
-	pub active_block: Option<(LLVMBasicBlockRef, BlockKey)>,
+	pub active_block: Option<(LLVMBlock, BlockKey)>,
+}
+
+#[derive(Default)]
+pub struct LLVMFunctionState {
+	pub params: HashMap<ParamKey, LLVMValue>,
+	pub locals: HashMap<LocalKey, LLVMValue>,
+	pub blocks: HashMap<BlockKey, LLVMBlock>,
+	pub sret  : Option<LLVMValue>,
 }
 
 pub struct LLVMBackend {
 	pub ctx: RefCell<Context>,
 
 	pub abi: Box<dyn Abi>,
-	pub llctx: LLVMContextRef,
-	pub llmod: LLVMModuleRef,
-	pub llbuilder: LLVMBuilderRef,
+	pub ll: LLVM,
 
 	pub state: RefCell<LLVMMutableState>,
+	pub function_state: RefCell<Option<LLVMFunctionState>>,
 }
 
+impl ops::Deref for LLVMBackend {
+	type Target = LLVM;
+	fn deref (&self) -> &LLVM { &self.ll }
+}
+
+impl ops::DerefMut for LLVMBackend {
+	fn deref_mut (&mut self) -> &mut LLVM { &mut self.ll }
+}
 
 pub struct StackVal {
 	pub llvalue: LLVMValue,
@@ -61,25 +76,19 @@ impl LLVMBackend {
 	pub fn new (ctx: Context) -> Option<Self> {
 		let abi = abi::get_abi(ctx.target.as_ref())?;
 
-		let llctx = unsafe { LLVMContextCreate() };
-
-		// TODO: module names
-		let llmod = unsafe { LLVMModuleCreateWithNameInContext(llvm_str!("UIR_MODULE"), llctx) };
+		let ll = LLVM::new(llvm_str!("UIR_MODULE"));
 
 		let state = RefCell::default();
-
-
-		let llbuilder = unsafe { LLVMCreateBuilderInContext(llctx) };
+		let function_state = RefCell::default();
 
 		let ctx = RefCell::new(ctx);
 
 		Some(Self {
 			abi,
 			ctx,
-			llctx,
-			llmod,
-			llbuilder,
-			state
+			ll,
+			state,
+			function_state,
 		})
 	}
 
@@ -143,15 +152,15 @@ impl LLVMBackend {
 		self.state.borrow_mut().active_fn.take()
 	}
 
-	pub fn active_block (&self) -> Option<(LLVMBasicBlockRef, BlockKey)> {
+	pub fn active_block (&self) -> Option<(LLVMBlock, BlockKey)> {
 		self.state.borrow().active_block
 	}
 
-	pub fn set_active_block (&self, xblk: (LLVMBasicBlockRef, BlockKey)) -> Option<(LLVMBasicBlockRef, BlockKey)> {
+	pub fn set_active_block (&self, xblk: (LLVMBlock, BlockKey)) -> Option<(LLVMBlock, BlockKey)> {
 		self.state.borrow_mut().active_block.replace(xblk)
 	}
 
-	pub fn clear_active_block (&self) -> Option<(LLVMBasicBlockRef, BlockKey)> {
+	pub fn clear_active_block (&self) -> Option<(LLVMBlock, BlockKey)> {
 		self.state.borrow_mut().active_block.take()
 	}
 
@@ -179,17 +188,17 @@ impl LLVMBackend {
 
 		match prim {
 			Bool
-			=> LLVMType::int1(self.llctx),
+			=> LLVMType::int1(self.ll.ctx),
 
 			| SInt8 | SInt16 | SInt32 | SInt64 | SInt128
 			| UInt8 | UInt16 | UInt32 | UInt64 | UInt128
-			=> LLVMType::int(self.llctx, (prim.size() * 8) as _),
+			=> LLVMType::int(self.ll.ctx, (prim.size() * 8) as _),
 
 			Real32
-			=> LLVMType::float(self.llctx),
+			=> LLVMType::float(self.ll.ctx),
 
 			Real64
-			=> LLVMType::double(self.llctx),
+			=> LLVMType::double(self.ll.ctx),
 		}
 	}
 
@@ -204,9 +213,9 @@ impl LLVMBackend {
 			use TyData::*;
 
 			match &ty.data {
-				Void => LLVMType::void(self.llctx),
+				Void => LLVMType::void(self.ll.ctx),
 
-				Block => LLVMType::label(self.llctx),
+				Block => LLVMType::label(self.ll.ctx),
 
 				Primitive(prim) => self.prim_ty(*prim),
 
@@ -221,7 +230,7 @@ impl LLVMBackend {
 						LLVMString::from(format!("$s({})", self.ctx().tys.get_index(ty_key).unwrap()))
 					};
 
-					let llty = LLVMType::named_empty_structure(self.llctx, llname);
+					let llty = LLVMType::named_empty_structure(self.ll.ctx, llname);
 
 					self.type_map_mut().insert(ty_key, llty);
 
@@ -234,7 +243,7 @@ impl LLVMBackend {
 				Function { parameter_tys, result_ty } => {
 					let param_types = parameter_tys.iter().map(|&ty_key| self.emit_ty(ty_key)).collect::<Vec<_>>();
 					let result_type = result_ty.map(|ty_key| self.emit_ty(ty_key));
-					LLVMType::function(&param_types, result_type.unwrap_or_else(|| LLVMType::void(self.llctx)), false)
+					LLVMType::function(&param_types, result_type.unwrap_or_else(|| LLVMType::void(self.ll.ctx)), false)
 				}
 			}
 		};
@@ -253,7 +262,7 @@ impl LLVMBackend {
 		let parameter_tys = lltype.get_param_types();
 		let return_ty = lltype.get_return_type();
 
-		let abi = self.abi.get_info(self.llctx, &parameter_tys, return_ty);
+		let abi = self.abi.get_info(self.ll.ctx, &parameter_tys, return_ty);
 		self.target_signature_type_map_mut().insert(lltype, abi);
 
 		Ref::map(self.target_signature_type_map(), |map| map.get(&lltype).unwrap())
@@ -320,7 +329,7 @@ impl LLVMBackend {
 			Self::generate_id("g", global_key)
 		};
 
-		let llglobal = LLVMValue::create_global(self.llmod, llty, llname);
+		let llglobal = LLVMValue::create_global(self.module, llty, llname);
 
 		if let Some(init_const) = global.init.as_ref() {
 			let llinit = self.emit_constant(init_const);
@@ -340,6 +349,7 @@ impl LLVMBackend {
 		let function = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).expect("valid function key");
 
 		let llty = self.emit_ty(function.ty);
+		let abi = self.abi_info(llty);
 
 		let llname = if let Some(name) = function.name.as_ref() {
 			LLVMString::from(name)
@@ -347,59 +357,130 @@ impl LLVMBackend {
 			Self::generate_id("f", function_key)
 		};
 
-		LLVMValue::create_function(self.llmod, llty, llname)
+		LLVMValue::create_function(self.module, abi.lltype, llname)
 	}
 
-	fn convert_value_to_abi (&self, abi_arg: &Arg, base_llvalue: LLVMValue) -> LLVMValue {
-		match abi_arg.kind {
-			// ArgKind::Ignore => {  }, // TODO: this should be unreachable, right?
 
+	pub fn emit_entry (&self) -> LLVMBlock {
+		let function_key = self.active_fn().expect("active function for emit_entry").1;
+		let function = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).expect("valid function key");
+		let llfunc = *self.function_map().get(&function_key).expect("initialized function");
+		debug_assert_eq!(self.active_fn().map(|x| x.0), Some(llfunc));
+
+		let lltype = self.emit_ty(function.ty);
+		let abi = self.abi_info(lltype);
+
+		let entry = self.ll.append_basic_block(llfunc, Some(llvm_str!("entry")));
+		self.ll.position_at_end(entry);
+
+		let mut function_state = LLVMFunctionState::default();
+
+		let mut llparams = llfunc.get_params().into_iter();
+
+
+		if abi.result.kind == ArgKind::Indirect {
+			function_state.sret = Some(llparams.next().unwrap());
+		}
+
+
+	 	for (abi_arg, &param_key) in abi.args.iter().zip(function.param_order.iter()) {
+			let param = match abi_arg.kind {
+				ArgKind::Direct => {
+					let llvalue = if let Some(ArgAttr::ZExt) = abi_arg.attribute {
+						// TODO: this is currently only handling i8 -> i1
+						let int1 = LLVMType::int1(self.ll.ctx);
+						debug_assert!(abi_arg.base_type == int1);
+
+						self.ll.trunc_or_bitcast(llparams.next().unwrap(), int1, None::<LLVMString>) // TODO: name truncs
+					} else if abi_arg.cast_types.is_empty() {
+						llparams.next().unwrap()
+					} else {
+						let mut agg = None;
+						for i in 0..abi_arg.cast_types.len() as u32 {
+							let llparam = llparams.next().unwrap();
+
+							agg = Some(self.ll.insert_value(agg, llparam, i, None::<LLVMString>)); // TODO: name inserts
+						}
+
+						self.ll.trunc_or_bitcast(agg.unwrap(), abi_arg.base_type, None::<LLVMString>) // TODO: name casts
+					};
+
+					let param = self.ll.alloca(abi_arg.base_type, None::<LLVMString>); // TODO: name params
+					self.ll.store(llvalue, param);
+
+					param
+				},
+
+				ArgKind::Indirect => {
+					llparams.next().unwrap()
+				}
+			};
+
+			function_state.params.insert(param_key, param);
+		}
+
+
+		for (&local_key, local) in function.locals.iter() {
+			let lltype = self.emit_ty(local.ty);
+			function_state.locals.insert(local_key, self.alloca(lltype, None::<LLVMString>)); // TODO name locals
+		}
+
+
+		entry
+	}
+
+
+	pub fn emit_return (&self) -> LLVMValue {
+		let function_key = self.active_fn().expect("active function for emit_return").1;
+		let function = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).expect("valid function key");
+		let llfunc = *self.function_map().get(&function_key).expect("initialized function");
+		debug_assert_eq!(self.active_fn().map(|x| x.0), Some(llfunc));
+
+		let lltype = self.emit_ty(function.ty);
+		let abi = self.abi_info(lltype);
+
+		let function_state = self.function_state.borrow().and_then(|f| f.as_ref()).unwrap();
+
+		match abi.result.kind {
 			ArgKind::Direct => {
-				if let Some(abi_attr) = abi_arg.attribute {
-					match abi_attr {
-						// ZExt is only valid on Direct, on either returns or args
-						ArgAttr::ZExt => {
-							// TODO: this is currently only handling i1 -> i8
-							debug_assert!(abi_arg.base_type == LLVMType::int1(self.llctx));
-
-							self.b_zext_or_bitcast(base_llvalue, LLVMType::int8(self.llctx), None::<LLVMString>) // TODO: name zexts
-						},
-						// ByVal is only valid on Indirect on args
-						ArgAttr::ByVal => unreachable!(),
-						// SRet is only valid on Indirect on returns
-						ArgAttr::SRet => unreachable!(),
-					}
-				} else if abi_arg.cast_types.is_empty() {
-					base_llvalue
+				if abi.result.base_type == LLVMType::void(self.ll.ctx) {
+					self.ll.ret_void()
 				} else {
-					let arg_struct = LLVMType::anonymous_structure(self.llctx, &abi_arg.cast_types, false);
+					let StackVal { llvalue: base_llvalue, .. } = self.stack_mut().pop().expect("return value on stack");
 
-					self.b_zext_or_bitcast(base_llvalue, arg_struct, None::<LLVMString>) // TODO: name destructure casts
+					let llvalue = if abi.result.attribute == Some(ArgAttr::ZExt) {
+						// TODO: this is currently only handling i1 -> i8
+						self.ll.zext_or_bitcast(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zext
+					} else if abi.result.cast_types.is_empty() {
+						base_llvalue
+					} else {
+						let arg_struct = LLVMType::anonymous_structure(self.ll.ctx, &abi.result.cast_types, false);
+						self.ll.zext_or_bitcast(base_llvalue, arg_struct, None::<LLVMString>) // TODO: name cast
+					};
+
+					self.ll.ret(llvalue)
 				}
 			}
 
 			ArgKind::Indirect => {
-				// if let Some(abi_attr) = abi_arg.attribute {
-				// 	debug_assert_eq!(abi_attr, ArgAttr::SRet);
+				let StackVal { llvalue: base_llvalue, .. } = self.stack_mut().pop().expect("return value on stack");
+				self.store(base_llvalue, function_state.sret.unwrap());
 
-				// 	self.b_alloca(abi_arg.base_type, None::<LLVMString>) // TODO: name stack returns
-				// } else {
-					let llslot = self.b_alloca(abi_arg.base_type.as_pointer(0), None::<LLVMString>); // TODO: name slots
-
-					self.b_store(llslot, base_llvalue)
-				// }
+				self.ll.ret_void()
 			}
 		}
 	}
 
-	fn emit_call (&self, StackVal { llvalue, lltype, ir_idx }: StackVal) -> LLVMValue {
+
+
+	fn emit_call (&self) -> LLVMValue {
+		let StackVal { llvalue, lltype, ir_idx } = self.stack_mut().pop().expect("function on stack");
+
 		assert!(lltype.is_function_kind());
 
 		let abi = self.abi_info(lltype);
 		debug_assert_eq!(lltype, abi.lltype);
 		debug_assert_eq!(lltype.count_param_types() as usize, abi.args.len());
-
-
 
 
 
@@ -411,11 +492,32 @@ impl LLVMBackend {
 
 			assert_eq!(base_lltype, abi_arg.base_type);
 
-			let value = self.convert_value_to_abi(abi_arg, base_llvalue);
+			let value = match abi_arg.kind {
+				ArgKind::Direct => {
+					if let Some(ArgAttr::ZExt) = abi_arg.attribute {
+						// TODO: this is currently only handling i1 -> i8
+						debug_assert!(abi_arg.base_type == LLVMType::int1(self.ll.ctx));
+
+						self.ll.zext_or_bitcast(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zexts
+					} else if abi_arg.cast_types.is_empty() {
+						base_llvalue
+					} else {
+						let arg_struct = LLVMType::anonymous_structure(self.ll.ctx, &abi_arg.cast_types, false);
+
+						self.ll.zext_or_bitcast(base_llvalue, arg_struct, None::<LLVMString>) // TODO: name destructure casts
+					}
+				}
+
+				ArgKind::Indirect => {
+					let llslot = self.ll.alloca(abi_arg.base_type.as_pointer(0), None::<LLVMString>); // TODO: name slots
+
+					self.ll.store(llslot, base_llvalue)
+				}
+			};
 
 			if abi_arg.cast_types.len() > 1 {
 				for i in 0..abi_arg.cast_types.len() as u32 {
-					llargs.push(self.b_extract_value(value, i, None::<LLVMString>))
+					llargs.push(self.ll.extract_value(value, i, None::<LLVMString>))
 				}
 			} else {
 				llargs.push(value);
@@ -431,25 +533,22 @@ impl LLVMBackend {
 					.map(|name| format!("$alloca(sret {})", name))
 					.unwrap_or_else(|| format!("$alloca(sret anon {})", abi.result.base_type));
 
-			let llvalue = self.b_alloca(abi.result.base_type, Some(name));
+			let llvalue = self.ll.alloca(abi.result.base_type, Some(name));
 
 			llargs.push(llvalue);
 		}
 
 
-
-
 		let name = ir_idx.and_then(|i| self.ir(i)).and_then(|j| j.name.clone());
 
-
 		llargs.reverse();
-		let result = self.b_call(abi.lltype, llvalue, llargs.as_slice(), name);
+		let result = self.ll.call(abi.lltype, llvalue, llargs.as_slice(), name);
 
 		if abi.result.base_type.is_void_kind() { return result }
 
 		let (llvalue, lltype) = match abi.result.kind {
 			ArgKind::Indirect => {
-				let load = self.b_load(result, None::<LLVMString>); // TODO: name sret loads
+				let load = self.ll.load(result, None::<LLVMString>); // TODO: name sret loads
 				(load, abi.result.base_type)
 			}
 
@@ -457,7 +556,7 @@ impl LLVMBackend {
 				(if abi.result.cast_types.is_empty() {
 					result
 				} else {
-					self.b_trunc_or_bitcast(result, abi.result.base_type, None::<LLVMString>) // TODO: name trunc rets
+					self.ll.trunc_or_bitcast(result, abi.result.base_type, None::<LLVMString>) // TODO: name trunc rets
 				}, abi.result.base_type)
 			}
 		};
@@ -465,53 +564,7 @@ impl LLVMBackend {
 		self.stack_mut().push(StackVal::new(llvalue, lltype, ir_idx));
 
 
-		// TODO:: handle return
-		// self.stack_mut().push(StackVal::new(result, return_lltype, ir_idx));
-
-
-		todo!()
-	}
-
-	fn b_extract_value (&self, llval: LLVMValue, idx: u32, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildExtractValue(self.llbuilder, llval.into(), idx, name.map(Into::into).unwrap_or_default().as_ptr()).into() }
-	}
-
-	fn b_trunc_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildTruncOrBitCast(self.llbuilder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
-	}
-
-	fn b_zext_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildZExtOrBitCast(self.llbuilder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
-	}
-
-	fn b_load (&self, llptr: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildLoad(self.llbuilder, llptr.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
-	}
-
-	fn b_store (&self, llval: LLVMValue, llptr: LLVMValue) -> LLVMValue {
-		unsafe { LLVMBuildStore(self.llbuilder, llval.into(), llptr.into()).into() }
-	}
-
-	fn b_call (&self, lltype: LLVMType, func: LLVMValue, args: &[LLVMValue], name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe {
-			LLVMBuildCall2(
-				self.llbuilder,
-				lltype.into(), func.into(),
-				args.as_ptr() as _, args.len() as _,
-				name.map(Into::into).unwrap_or_default().as_ptr()
-			).into()
-		}
-	}
-
-	fn b_alloca (&self, lltype: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildAlloca(
-			self.llbuilder,
-			lltype.into(),
-			name
-				.map(Into::into)
-				.unwrap_or_default()
-				.as_ptr()
-		).into() }
+		llvalue
 	}
 }
 
@@ -600,11 +653,11 @@ typedef unsigned long uint64_ty;
 				let direct_function_abi = backend.abi_info(ll_direct_function_ty);
 				let struct_function_abi = backend.abi_info(ll_struct_function_ty);
 
-				let ll_direct_function = LLVMValue::create_function(backend.llmod, ll_direct_function_ty, concat!("fn_direct_", stringify!($name)));
-				let ll_struct_function = LLVMValue::create_function(backend.llmod, ll_struct_function_ty, concat!("fn_struct_", stringify!($name)));
+				let ll_direct_function = LLVMValue::create_function(backend.module, ll_direct_function_ty, concat!("fn_direct_", stringify!($name)));
+				let ll_struct_function = LLVMValue::create_function(backend.module, ll_struct_function_ty, concat!("fn_struct_", stringify!($name)));
 
-				direct_function_abi.apply_attributes(backend.llctx, ll_direct_function);
-				struct_function_abi.apply_attributes(backend.llctx, ll_struct_function);
+				direct_function_abi.apply_attributes(backend.ll.ctx, ll_direct_function);
+				struct_function_abi.apply_attributes(backend.ll.ctx, ll_struct_function);
 
 				let ll_mod = llvm_from_c(build_c_abi_str!($name ($( $field_name : $field_ty ),*)));
 
@@ -628,8 +681,8 @@ typedef unsigned long uint64_ty;
 				println!();
 				println!("got: {}\nexpected: {}", ll_struct_function_ty, truth_ll_struct_function_ty);
 
-				assert!(llvm_ty_eq(truth_ctx, truth_ll_direct_function_ty, backend.llctx, ll_direct_function_ty));
-				assert!(llvm_ty_eq(truth_ctx, truth_ll_struct_function_ty, backend.llctx, ll_struct_function_ty));
+				assert!(llvm_ty_eq(truth_ctx, truth_ll_direct_function_ty, backend.ll.ctx, ll_direct_function_ty));
+				assert!(llvm_ty_eq(truth_ctx, truth_ll_struct_function_ty, backend.ll.ctx, ll_struct_function_ty));
 			} )*
 		} };
 	}
