@@ -1153,57 +1153,48 @@ typedef unsigned long uint64_ty;
 				let tys = &[ 	$( builder.$field_ty().as_key() ),* ];
 				let struct_ty = builder.structure_ty(tys.to_vec()).unwrap().set_name(stringify!($name)).as_key();
 
-				let direct_function_ty = {
-					let ret_ty =
-						match tys.len() {
-							0 => None,
-							1 => Some(tys[0]),
-							_ => Some(struct_ty),
-						};
+				// let direct_function_ty = {
+				// 	let ret_ty =
+				// 		match tys.len() {
+				// 			0 => None,
+				// 			1 => Some(tys[0]),
+				// 			_ => Some(struct_ty),
+				// 		};
 
-					builder.function_ty(tys.to_vec(), ret_ty).unwrap().as_key()
-				};
+				// 	builder.function_ty(tys.to_vec(), ret_ty).unwrap().as_key()
+				// };
 
 				let struct_function_ty = builder.function_ty(vec! [ struct_ty ], Some(struct_ty)).unwrap().as_key();
-
 				let backend = LLVMBackend::new(ctx).unwrap();
 
-				let ll_direct_function_ty = backend.emit_ty(direct_function_ty);
-				let ll_struct_function_ty = backend.emit_ty(struct_function_ty);
-
-				let direct_function_abi = backend.abi_info(ll_direct_function_ty);
-				let struct_function_abi = backend.abi_info(ll_struct_function_ty);
-
-				let ll_direct_function = LLVMValue::create_function(backend.module, ll_direct_function_ty, concat!("fn_direct_", stringify!($name)));
+				let ll_struct_function_user_ty = backend.emit_ty(struct_function_ty);
+				let struct_function_abi = backend.abi_info(ll_struct_function_user_ty);
+				let ll_struct_function_ty = struct_function_abi.lltype;
 				let ll_struct_function = LLVMValue::create_function(backend.module, ll_struct_function_ty, concat!("fn_struct_", stringify!($name)));
-
-				direct_function_abi.apply_attributes(backend.ll.ctx, ll_direct_function);
 				struct_function_abi.apply_attributes(backend.ll.ctx, ll_struct_function);
-
 				let ll_mod = llvm_from_c(build_c_abi_str!($name ($( $field_name : $field_ty ),*)));
-
-				let truth_ll_direct_function = LLVMValue::get_function(ll_mod, concat!("fn_direct_", stringify!($name)));
 				let truth_ll_struct_function = LLVMValue::get_function(ll_mod, concat!("fn_struct_", stringify!($name)));
-
-				let truth_ll_direct_function_ty = LLVMType::of(truth_ll_direct_function);
 				let truth_ll_struct_function_ty = LLVMType::of(truth_ll_struct_function);
-
 				let truth_ctx = unsafe { LLVMGetModuleContext(ll_mod) };
-
-				println!("direct abi: {:#?}", direct_function_abi);
 				println!("struct abi: {:#?}", struct_function_abi);
-
-
-				println!("got: {:#?}\nexpected: {:#?}", ll_direct_function, truth_ll_direct_function);
 				println!();
 				println!("got: {:#?}\nexpected: {:#?}", ll_struct_function, truth_ll_struct_function);
-
-				println!("got: {}\nexpected: {}", ll_direct_function_ty, truth_ll_direct_function_ty);
 				println!();
 				println!("got: {}\nexpected: {}", ll_struct_function_ty, truth_ll_struct_function_ty);
-
-				assert!(llvm_ty_eq(truth_ctx, truth_ll_direct_function_ty, backend.ll.ctx, ll_direct_function_ty));
 				assert!(llvm_ty_eq(truth_ctx, truth_ll_struct_function_ty, backend.ll.ctx, ll_struct_function_ty));
+
+
+				// let ll_direct_function_user_ty = backend.emit_ty(direct_function_ty);
+				// let direct_function_abi = backend.abi_info(ll_direct_function_user_ty);
+				// let ll_direct_function_ty = direct_function_abi.lltype;
+				// let ll_direct_function = LLVMValue::create_function(backend.module, ll_direct_function_ty, concat!("fn_direct_", stringify!($name)));
+				// direct_function_abi.apply_attributes(backend.ll.ctx, ll_direct_function);
+				// let truth_ll_direct_function = LLVMValue::get_function(ll_mod, concat!("fn_direct_", stringify!($name)));
+				// let truth_ll_direct_function_ty = LLVMType::of(truth_ll_direct_function);
+				// println!("direct abi: {:#?}", direct_function_abi);
+				// println!("got: {:#?}\nexpected: {:#?}", ll_direct_function, truth_ll_direct_function);
+				// println!("got: {}\nexpected: {}", ll_direct_function_ty, truth_ll_direct_function_ty);
+				// assert!(llvm_ty_eq(truth_ctx, truth_ll_direct_function_ty, backend.ll.ctx, ll_direct_function_ty));
 			} )*
 		} };
 	}
