@@ -7,6 +7,9 @@ use std::{cell::{Ref, RefCell, RefMut}, collections::HashMap, ops};
 pub(crate) mod wrapper;
 pub(crate) mod abi;
 
+#[cfg(test)]
+mod test;
+
 use abi::{Abi, ArgAttr, ArgKind};
 
 use uir_core::{ir::*, support::{slotmap::KeyData, stack::Stack, utils::{RefAndThen}}, ty::*};
@@ -16,10 +19,10 @@ use wrapper::*;
 
 #[derive(Default)]
 pub struct LLVMMutableState {
-	pub types: HashMap<TyKey, LLVMType>,
-	pub globals: HashMap<GlobalKey, LLVMValue>,
-	pub functions: HashMap<FunctionKey, LLVMValue>,
-	pub target_signature_types: HashMap<LLVMType, abi::Function>,
+	pub types: RefCell<HashMap<TyKey, LLVMType>>,
+	pub globals: RefCell<HashMap<GlobalKey, LLVMValue>>,
+	pub functions: RefCell<HashMap<FunctionKey, LLVMValue>>,
+	pub target_signature_types: RefCell<HashMap<LLVMType, abi::Function>>,
 }
 
 pub struct LLVMFunctionState<'c> {
@@ -58,7 +61,7 @@ pub struct LLVMBackend {
 	pub abi: Box<dyn Abi>,
 	pub ll: LLVM,
 
-	pub state: RefCell<LLVMMutableState>,
+	pub state: LLVMMutableState,
 }
 
 impl ops::Deref for LLVMBackend {
@@ -98,7 +101,7 @@ impl LLVMBackend {
 
 		let ll = LLVM::new(llvm_str!("UIR_MODULE"));
 
-		let state = RefCell::default();
+		let state = LLVMMutableState::default();
 
 		let ctx = RefCell::new(ctx);
 
@@ -110,44 +113,54 @@ impl LLVMBackend {
 		})
 	}
 
+	#[track_caller]
 	pub fn ctx (&self) -> Ref<Context> {
 		self.ctx.borrow()
 	}
 
+	#[track_caller]
 	pub fn ctx_mut (&self) -> RefMut<Context> {
 		self.ctx.borrow_mut()
 	}
 
+	#[track_caller]
 	pub fn type_map (&self) -> Ref<HashMap<TyKey, LLVMType>> {
-		Ref::map(self.state.borrow(), |state| &state.types)
+		self.state.types.borrow()
 	}
 
+	#[track_caller]
 	pub fn type_map_mut (&self) -> RefMut<HashMap<TyKey, LLVMType>> {
-		RefMut::map(self.state.borrow_mut(), |state| &mut state.types)
+		self.state.types.borrow_mut()
 	}
 
+	#[track_caller]
 	pub fn global_map (&self) -> Ref<HashMap<GlobalKey, LLVMValue>> {
-		Ref::map(self.state.borrow(), |state| &state.globals)
+		self.state.globals.borrow()
 	}
 
+	#[track_caller]
 	pub fn global_map_mut (&self) -> RefMut<HashMap<GlobalKey, LLVMValue>> {
-		RefMut::map(self.state.borrow_mut(), |state| &mut state.globals)
+		self.state.globals.borrow_mut()
 	}
 
+	#[track_caller]
 	pub fn function_map (&self) -> Ref<HashMap<FunctionKey, LLVMValue>> {
-		Ref::map(self.state.borrow(), |state| &state.functions)
+		self.state.functions.borrow()
 	}
 
+	#[track_caller]
 	pub fn function_map_mut (&self) -> RefMut<HashMap<FunctionKey, LLVMValue>> {
-		RefMut::map(self.state.borrow_mut(), |state| &mut state.functions)
+		self.state.functions.borrow_mut()
 	}
 
+	#[track_caller]
 	pub fn target_signature_type_map (&self) -> Ref<HashMap<LLVMType, abi::Function>> {
-		Ref::map(self.state.borrow(), |state| &state.target_signature_types)
+		self.state.target_signature_types.borrow()
 	}
 
+	#[track_caller]
 	pub fn target_signature_type_map_mut (&self) -> RefMut<HashMap<LLVMType, abi::Function>> {
-		RefMut::map(self.state.borrow_mut(), |state| &mut state.target_signature_types)
+		self.state.target_signature_types.borrow_mut()
 	}
 
 
@@ -325,6 +338,8 @@ impl LLVMBackend {
 			llglobal.set_global_initializer(llinit)
 		}
 
+		self.global_map_mut().insert(global_key, llglobal);
+
 		llglobal
 	}
 
@@ -338,6 +353,7 @@ impl LLVMBackend {
 
 		let llty = self.emit_ty(function.ty);
 		let abi = self.abi_info(llty);
+		let abi_llty = abi.lltype;
 
 		let llname = if let Some(name) = function.name.as_ref() {
 			LLVMString::from(name)
@@ -345,7 +361,11 @@ impl LLVMBackend {
 			Self::generate_id("f", function_key)
 		};
 
-		LLVMValue::create_function(self.module, abi.lltype, llname)
+		let func = LLVMValue::create_function(self.module, abi_llty, llname);
+
+		self.function_map_mut().insert(function_key, func);
+
+		func
 	}
 
 
@@ -391,6 +411,9 @@ impl LLVMBackend {
 		}
 
 		for &block_key in func.block_order.iter() {
+			let llblock = *fstate.blocks.get(&block_key).unwrap();
+			fstate.llblock = llblock;
+			fstate.block_key = block_key;
 			self.emit_block_terminator(&mut fstate, &block_in_vals, block_out_vals.remove(&block_key).unwrap())
 		}
 
@@ -409,9 +432,11 @@ impl LLVMBackend {
 			match &ir.data {
 				x if x.is_terminator() => unreachable!(),
 
-				IrData::Phi(ty_key) => {
+				IrData::Phi(phi_ty_key) => {
+					dbg!(phi_ty_key);
+
 					let name = ir.name.as_deref().unwrap_or("phi");
-					let llty = self.emit_ty(*ty_key);
+					let llty = self.emit_ty(*phi_ty_key);
 					let phi = self.ll.phi(llty, Some(name));
 					let ty_key = self.ir_ty(fstate, ir_idx);
 
@@ -423,6 +448,8 @@ impl LLVMBackend {
 
 
 				IrData::Constant(constant) => {
+					dbg!(constant);
+
 					let (llconst, llconst_ty) = self.emit_constant(constant);
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					fstate.stack.push(StackVal::source(llconst, llconst_ty, ir_idx, ty_key))
@@ -433,6 +460,8 @@ impl LLVMBackend {
 
 
 				IrData::GlobalRef(gkey) => {
+					dbg!(gkey);
+
 					let global = self.ctx().and_then(|ctx| ctx.globals.get(*gkey)).unwrap();
 					let llg = self.emit_global(*gkey);
 					let llty = self.emit_ty(global.ty).as_pointer(0);
@@ -441,6 +470,8 @@ impl LLVMBackend {
 				}
 
 				IrData::FunctionRef(fkey) => {
+					dbg!(fkey);
+
 					let function = self.ctx().and_then(|ctx| ctx.functions.get(*fkey)).unwrap();
 					let llf = self.emit_function_decl(*fkey);
 					let llty = self.emit_ty(function.ty).as_pointer(0);
@@ -449,27 +480,35 @@ impl LLVMBackend {
 				}
 
 				IrData::BlockRef(bkey) => {
+					dbg!(bkey);
+
 					let llbb = *fstate.blocks.get(bkey).unwrap();
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					fstate.stack.push(StackVal::source(llbb.as_value(), LLVMType::label(self.ll.ctx), ir_idx, ty_key))
 				}
 
 				IrData::ParamRef(pkey) => {
+					dbg!(pkey);
+
 					let llparam = *fstate.params.get(pkey).unwrap();
-					let llty = self.emit_ty(fstate.func.param_data.get(*pkey).unwrap().ty);
+					let llty = self.emit_ty(fstate.func.param_data.get(*pkey).unwrap().ty).as_pointer(0);
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					fstate.stack.push(StackVal::source(llparam, llty, ir_idx, ty_key))
 				}
 
 				IrData::LocalRef(lkey) => {
+					dbg!(lkey);
+
 					let llvar = *fstate.locals.get(lkey).unwrap();
-					let llty = self.emit_ty(fstate.func.locals.get(*lkey).unwrap().ty);
+					let llty = self.emit_ty(fstate.func.locals.get(*lkey).unwrap().ty).as_pointer(0);
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					fstate.stack.push(StackVal::source(llvar, llty, ir_idx, ty_key))
 				}
 
 
 				IrData::BinaryOp(bin_op) => {
+					dbg!(bin_op);
+
 					let a = fstate.stack.pop().unwrap();
 					let b = fstate.stack.pop().unwrap();
 
@@ -483,6 +522,8 @@ impl LLVMBackend {
 				}
 
 				IrData::UnaryOp(un_op) => {
+					dbg!(un_op);
+
 					let e = fstate.stack.pop().unwrap();
 
 					let ty = self.ctx().and_then(|ctx| ctx.tys.get(e.ty_key)).unwrap();
@@ -493,6 +534,8 @@ impl LLVMBackend {
 				}
 
 				IrData::CastOp(cast_op, target_ty_key) => {
+					dbg!(cast_op, target_ty_key);
+
 					let e = fstate.stack.pop().unwrap();
 
 					let ty = self.ctx().and_then(|ctx| ctx.tys.get(e.ty_key)).unwrap();
@@ -504,11 +547,13 @@ impl LLVMBackend {
 					fstate.stack.push(StackVal::source(llvalue, lltype, ir_idx, ty_key))
 				}
 
-				IrData::Gep(num_indices) => {
+				IrData::Gep(gep_num_indices) => {
+					dbg!(gep_num_indices);
+
 					let ptr = fstate.stack.pop().unwrap();
 					assert!(ptr.lltype.is_pointer_kind());
 
-					let indices = (0..*num_indices).into_iter().map(|_| fstate.stack.pop().unwrap().llvalue).collect::<Vec<_>>();
+					let indices = (0..*gep_num_indices).into_iter().map(|_| fstate.stack.pop().unwrap().llvalue).collect::<Vec<_>>();
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					let llty = self.emit_ty(ty_key);
 					let gep = self.ll.gep(llty, ptr.llvalue, &indices, None::<LLVMString>); // TODO: name geps
@@ -516,16 +561,19 @@ impl LLVMBackend {
 				}
 
 				IrData::Load => {
+					dbg!("load");
+
 					let StackVal { lltype, llvalue, .. } = fstate.stack.pop().unwrap();
-					assert!(lltype.is_pointer_kind());
 					assert!(!lltype.get_element_type().is_function_kind()); // TODO: more robust unloadable type check?
 
 					let load = self.ll.load(llvalue, None::<LLVMString>); // TODO: name loads
 					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(StackVal::source(load, lltype, ir_idx, ty_key))
+					fstate.stack.push(StackVal::source(load, lltype.get_element_type(), ir_idx, ty_key))
 				}
 
 				IrData::Store => {
+					dbg!("stor");
+
 					let StackVal { lltype: llptr_ty, llvalue: llptr, .. } = fstate.stack.pop().unwrap();
 					let StackVal { lltype: llval_ty, llvalue: llval, .. } = fstate.stack.pop().unwrap();
 					assert_eq!(llptr_ty.get_element_type(), llval_ty);
@@ -536,6 +584,8 @@ impl LLVMBackend {
 
 
 				IrData::Call => {
+					dbg!("call");
+
 					if let Some((llval, llty)) = self.emit_call(fstate) {
 						let ty_key = self.ir_ty(fstate, ir_idx);
 						fstate.stack.push(StackVal::source(llval, llty, ir_idx, ty_key))
@@ -543,15 +593,21 @@ impl LLVMBackend {
 				}
 
 				IrData::Duplicate => {
+					dbg!("duplicate");
+
 					let val = *fstate.stack.peek().unwrap();
 					fstate.stack.push(val);
 				}
 
 				IrData::Discard => {
+					dbg!("discard");
+
 					fstate.stack.pop();
 				}
 
 				IrData::Swap => {
+					dbg!("swap");
+
 					let a = fstate.stack.pop().unwrap();
 					let b = fstate.stack.pop().unwrap();
 					fstate.stack.push(b);
@@ -568,9 +624,11 @@ impl LLVMBackend {
 				=> unreachable!()
 			}
 
-			if matches!(iter.peek(), Some((_, x)) if x.is_terminator()) {
-				assert!(ir_idx == block.ir.len() - 1);
-				return (in_vals, std::mem::take(&mut fstate.stack))
+			if let Some(&(j, x)) = iter.peek() {
+				if x.is_terminator() {
+					assert_eq!(j, block.ir.len() - 1);
+					return (in_vals, std::mem::take(&mut fstate.stack))
+				}
 			}
 		}
 
@@ -779,8 +837,9 @@ impl LLVMBackend {
 
 
 	fn emit_call (&self, fstate: &mut LLVMFunctionState) -> Option<(LLVMValue, LLVMType)> {
-		let StackVal { llvalue, lltype, ir_idx, ty_key: _ } = fstate.stack.pop().unwrap();
+		let StackVal { llvalue, mut lltype, ir_idx, ty_key: _ } = fstate.stack.pop().unwrap();
 
+		if lltype.is_pointer_kind() { lltype = lltype.get_element_type() }
 
 		assert!(lltype.is_function_kind());
 

@@ -18,5 +18,8 @@ llvm-backend = { package = "uir-llvm-backend", path = "./backends/llvm", optiona
 cli = { package = "uir-cli", path = "./cli" }
 
 
+[features]
+default = ["llvm-backend"]
+
 [workspace]
 members = [ "./support", "./core", "./backends/llvm", "./cli" ]
