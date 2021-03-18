@@ -1,4 +1,4 @@
-use std::mem;
+use std::{collections::HashMap, mem};
 
 use support::{
 	slotmap::{ AsKey, Keyed },
@@ -121,6 +121,21 @@ impl OpStack {
 
 
 
+#[derive(Debug, Clone, Default)]
+pub struct TyMap {
+	data: HashMap<(BlockKey, usize), TyKey>,
+}
+
+impl TyMap {
+	pub(crate) fn set (&mut self, block_key: impl AsKey<BlockKey>, index: usize, ty_key: impl AsKey<TyKey>) {
+		assert!(self.data.insert((block_key.as_key(), index), ty_key.as_key()).is_none())
+	}
+
+	pub fn get (&self, block_key: BlockKey, index: usize) -> TyKey {
+		*self.data.get(&(block_key, index)).unwrap()
+	}
+}
+
 
 #[derive(Debug)]
 pub struct TyChecker<'r, 'b, 'f> {
@@ -128,6 +143,7 @@ pub struct TyChecker<'r, 'b, 'f> {
 	pub cfg: Cfg,
 	pub function: Option<&'f Function>,
 	pub stack: OpStack,
+	pub ty_map: TyMap,
 }
 
 
@@ -137,7 +153,8 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			builder,
 			cfg,
 			function: Some(function),
-			stack: OpStack::default()
+			stack: OpStack::default(),
+			ty_map: TyMap::default(),
 		}
 	}
 
@@ -147,7 +164,8 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			builder,
 			cfg: Cfg::default(),
 			function: None,
-			stack: OpStack::default()
+			stack: OpStack::default(),
+			ty_map: TyMap::default(),
 		}
 	}
 
@@ -313,25 +331,34 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			=> curr_ty.is_real()
 			&& new_ty.is_int(),
 
-
 			ZeroExtend
 			=> curr_ty.is_int()
 			&& new_ty.is_int()
-			&& self.builder.size_of(new_ty)? >= self.builder.size_of(curr_ty)?,
+			&& self.builder.size_of(new_ty)? > self.builder.size_of(curr_ty)?,
 
 			SignExtend
-			=> self.builder.size_of(new_ty)? >= self.builder.size_of(curr_ty)?
+			=> self.builder.size_of(new_ty)? > self.builder.size_of(curr_ty)?
 			&& (
 					 (curr_ty.is_int() && new_ty.is_int())
 				|| (curr_ty.is_real() && new_ty.is_real())
 			),
 
+			RealExtend
+			=> curr_ty.is_real()
+			&& new_ty.is_real()
+			&& self.builder.size_of(new_ty)? > self.builder.size_of(curr_ty)?,
+
 			Truncate
-			=> self.builder.size_of(curr_ty)? >= self.builder.size_of(new_ty)?
+			=> self.builder.size_of(curr_ty)? > self.builder.size_of(new_ty)?
 			&& (
 					 (curr_ty.is_int()  && new_ty.is_int())
 				|| (curr_ty.is_real() && new_ty.is_real())
 			),
+
+			RealTruncate
+			=> curr_ty.is_real()
+			&& new_ty.is_real()
+			&& self.builder.size_of(curr_ty)? > self.builder.size_of(new_ty)?,
 
 			Bitcast
 			=> self.builder.size_of(curr_ty)? == self.builder.size_of(new_ty)?
@@ -480,18 +507,23 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		})
 	}
 
-	pub fn check_node (&mut self, parent: Keyed<Block>, node: &Ir) -> IrDataResult {
+	pub fn check_node (&mut self, parent: Keyed<Block>, node: &Ir, node_idx: usize) -> IrDataResult {
 		use IrData::*;
 
 		match &node.data {
 			Constant(constant)
 			=> {
-				self.stack.push_constant(self.get_constant_ty(constant)?.as_key(), constant.clone())
+				let ty = self.get_constant_ty(constant)?.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
+
+				self.stack.push_constant(ty, constant.clone())
 			}
 
 			BuildAggregate(ty_key, agg_data)
 			=> {
 				let ty = self.builder.get_finalized_ty(ty_key)?;
+				self.ty_map.set(parent.as_key(), node_idx, ty);
+
 
 				assert(ty.is_aggregate(), TyErr::ExpectedAggregateTy(ty.as_key()))?;
 
@@ -574,48 +606,60 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			GlobalRef(global_key)
 			=> {
 				let global = self.builder.get_global(global_key)?;
-				let ty_key = self.builder.get_finalized_ty(global.ty)?.as_key();
+				let ty = self.builder.get_finalized_ty(global.ty)?.as_key();
+				let ty = self.builder.pointer_ty(ty)?.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.stack.push(self.builder.pointer_ty(ty_key)?)
+				self.stack.push(ty)
 			}
 
 			FunctionRef(function_key)
 			=> {
 				let function = self.builder.get_function(function_key)?;
+				let ty = self.builder.get_finalized_ty(function.ty)?;
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.stack.push(self.builder.get_finalized_ty(function.ty)?)
+				self.stack.push(ty)
 			}
 
 			BlockRef(block_key)
 			=> {
+				let ty = self.builder.block_ty();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
+
 				self.get_block(block_key)?;
 
-				self.stack.push(self.builder.block_ty())
+				self.stack.push(ty)
 			}
 
 			ParamRef(param_key)
 			=> {
 				let param = self.get_param(param_key)?;
-				let ty_key = self.builder.get_finalized_ty(param.ty)?.as_key();
+				let ty = self.builder.get_finalized_ty(param.ty)?.as_key();
+				let ty = self.builder.pointer_ty(ty)?.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.stack.push(self.builder.pointer_ty(ty_key)?)
+				self.stack.push(ty)
 			}
 
 			LocalRef(local_key)
 			=> {
 				let local = self.get_local(local_key)?;
-				let ty_key = self.builder.get_finalized_ty(local.ty)?.as_key();
+				let ty = self.builder.get_finalized_ty(local.ty)?.as_key();
+				let ty = self.builder.pointer_ty(ty)?.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.stack.push(self.builder.pointer_ty(ty_key)?)
+				self.stack.push(ty)
 			}
 
 			Phi(ty_key)
 			=> {
-				let ty_key = self.builder.get_finalized_ty(ty_key)?.as_key();
+				let ty = self.builder.get_finalized_ty(ty_key)?.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.cfg.add_in_value(parent, ty_key).unwrap();
+				self.cfg.add_in_value(parent, ty).unwrap();
 
-				self.stack.push(ty_key)
+				self.stack.push(ty)
 			}
 
 			BinaryOp(op)
@@ -624,25 +668,30 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				let right = self.stack.pop()?;
 
 				assert(self.ty_ck(left, right), TyErr::BinaryOpTypeMismatch(left.as_key(), right))?;
+				let ty = self.check_bin_op(*op, left)?.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.stack.push(self.check_bin_op(*op, left)?.as_key())
+				self.stack.push(ty)
 			}
 
 			UnaryOp(op)
 			=> {
 				let operand = self.builder.get_ty(self.stack.pop()?)?;
+				let ty = self.check_un_op(*op, operand)?.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.stack.push(self.check_un_op(*op, operand)?.as_key())
+				self.stack.push(ty)
 			}
 
 			CastOp(op, ty_key)
 			=> {
 				let operand = self.builder.get_ty(self.stack.pop()?)?;
-				let new_ty = self.builder.get_finalized_ty(ty_key)?;
+				let ty = self.builder.get_finalized_ty(ty_key)?;
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.check_cast_op(*op, operand, new_ty)?;
+				self.check_cast_op(*op, operand, ty)?;
 
-				self.stack.push(new_ty)
+				self.stack.push(ty)
 			}
 
 			Gep(num_indices)
@@ -696,29 +745,33 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				}
 
 
-				let target = target.as_key();
+				let ty = target.as_key();
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
 				self.stack.pop_n(peek_base);
-				self.stack.push(self.builder.pointer_ty(target)?)
+				self.stack.push(self.builder.pointer_ty(ty)?)
 			}
 
 			Load
 			=> {
 				let target = self.builder.get_ty(self.stack.pop()?)?;
+				let ty = self.extract_pointer_target(target)?;
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				self.stack.push(self.extract_pointer_target(target)?)
+				self.stack.push(ty)
 			}
 
 			Store
 			=> {
 				let target = self.builder.get_ty(self.stack.pop()?)?;
-				let target_value = self.extract_pointer_target(target)?;
+				let target_ty = self.extract_pointer_target(target)?;
 
-				let value = self.builder.get_ty(self.stack.pop()?)?;
+				let ty = self.builder.get_ty(self.stack.pop()?)?;
+				self.ty_map.set(parent.as_key(), node_idx, ty);
 
-				assert(self.ty_ck(target_value, value), TyErr::ExpectedTy(target_value, value.as_key()))?;
+				assert(self.ty_ck(target_ty, ty), TyErr::ExpectedTy(target_ty, ty.as_key()))?;
 
-				self.stack.push(value)
+				self.stack.push(ty)
 			}
 
 			Branch(_)
@@ -737,7 +790,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				self.set_out_values(parent)
 			}
 
-			Switch(edges)
+			Switch(edges, _default)
 			=> {
 				let pred = self.builder.get_ty(self.stack.pop()?)?;
 
@@ -782,9 +835,10 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 					self.stack.pop_n(peek_base);
 
 					if let Some(result) = result_ty {
-						let result = self.builder.get_finalized_ty(result)?;
+						let ty = self.builder.get_finalized_ty(result)?;
+						self.ty_map.set(parent.as_key(), node_idx, ty);
 
-						self.stack.push(result)
+						self.stack.push(ty)
 					}
 				} else {
 					return Err(TyErr::ExpectedFunction(callee.as_key()).into())
@@ -807,12 +861,14 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 			Duplicate
 			=> {
-				self.stack.duplicate()?
+				self.stack.duplicate()?;
+				if let Ok(cur) = self.stack.peek_at(0) { self.ty_map.set(parent.as_key(), node_idx, cur); }
 			}
 
 			Discard
 			=> {
 				self.stack.pop()?;
+				if let Ok(cur) = self.stack.peek_at(0) { self.ty_map.set(parent.as_key(), node_idx, cur); }
 			}
 
 			Swap
@@ -821,6 +877,8 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				let b = self.stack.pop()?;
 				self.stack.push(a);
 				self.stack.push(b);
+
+				if let Ok(cur) = self.stack.peek_at(0) { self.ty_map.set(parent.as_key(), node_idx, cur); }
 			}
 
 			Unreachable
@@ -843,7 +901,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 		let block = self.function.unwrap().block_data.get_keyed(block_key).ok_or(IrErrData::InvalidBlockKey(block_key)).at(FunctionErrLocation::Root)?;
 
 		for (i, node) in block.ir.iter().enumerate() {
-			self.check_node(block, node).at(FunctionErrLocation::Node(block_key, i))?;
+			self.check_node(block, node, i).at(FunctionErrLocation::Node(block_key, i))?;
 		}
 
 		Ok(())
@@ -941,7 +999,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 
 
-pub fn check_function (builder: &mut Builder<'_>, cfg: Cfg, function_key: FunctionKey) -> IrResult<Cfg> {
+pub fn check_function (builder: &mut Builder<'_>, cfg: Cfg, function_key: FunctionKey) -> IrResult<(Cfg, TyMap)> {
 	// SAFETY:
 	// MIRI may not like this but it is safe;
 
@@ -968,7 +1026,7 @@ pub fn check_function (builder: &mut Builder<'_>, cfg: Cfg, function_key: Functi
 
 	state.check_function().at(function_key)?;
 
-	Ok(state.cfg)
+	Ok((state.cfg, state.ty_map))
 }
 
 

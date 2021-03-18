@@ -16,18 +16,18 @@ fn walk_block (function: &Function, cfg: &mut Cfg, block_key: BlockKey) -> Funct
 	}
 
 	let mut iter = block.ir.iter().enumerate();
-	let mut phi_closed = false;
+	let mut init_closed = false;
 
 	while let Some((i, node)) = iter.next() {
-		if node.is_phi() {
-			if phi_closed {
+		if node.is_init() {
+			if init_closed {
 				return Err(
 					CfgErr::PhiNotAtTop.to_ir()
 						.at(FunctionErrLocation::Node(block_key, i))
 				)
 			}
 		} else {
-			phi_closed = true;
+			init_closed = true;
 
 			if node.is_terminator() {
 				node.for_each_edge(|to| cfg.add_edge(block_key, to)).map_err(|e|

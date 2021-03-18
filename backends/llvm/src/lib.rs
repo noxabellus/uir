@@ -9,7 +9,7 @@ pub(crate) mod abi;
 
 use abi::{Abi, ArgAttr, ArgKind};
 
-use uir_core::{ir::*, support::{slotmap::KeyData, stack::Stack, utils::RefAndThen}, ty::*};
+use uir_core::{ir::*, support::{slotmap::KeyData, stack::Stack, utils::{RefAndThen}}, ty::*};
 
 use wrapper::*;
 
@@ -20,17 +20,36 @@ pub struct LLVMMutableState {
 	pub globals: HashMap<GlobalKey, LLVMValue>,
 	pub functions: HashMap<FunctionKey, LLVMValue>,
 	pub target_signature_types: HashMap<LLVMType, abi::Function>,
-	pub stack: Stack<StackVal>,
-	pub active_fn: Option<(LLVMValue, FunctionKey)>,
-	pub active_block: Option<(LLVMBlock, BlockKey)>,
 }
 
-#[derive(Default)]
-pub struct LLVMFunctionState {
+pub struct LLVMFunctionState<'c> {
+	pub func: &'c Function,
+	pub llfunc: LLVMValue,
+	pub fn_key: FunctionKey,
+	pub llblock: LLVMBlock,
+	pub block_key: BlockKey,
 	pub params: HashMap<ParamKey, LLVMValue>,
 	pub locals: HashMap<LocalKey, LLVMValue>,
 	pub blocks: HashMap<BlockKey, LLVMBlock>,
+	pub stack : Stack<StackVal>,
 	pub sret  : Option<LLVMValue>,
+}
+
+impl<'c> LLVMFunctionState<'c> {
+	pub fn new (llfunc: LLVMValue, fn_key: FunctionKey, func: &'c Function) -> Self {
+		Self {
+			llfunc,
+			fn_key,
+			func,
+			llblock: LLVMBlock::default(),
+			block_key: BlockKey::default(),
+			params: HashMap::default(),
+			locals: HashMap::default(),
+			blocks: HashMap::default(),
+			stack: Stack::default(),
+			sret: None,
+		}
+	}
 }
 
 pub struct LLVMBackend {
@@ -40,7 +59,6 @@ pub struct LLVMBackend {
 	pub ll: LLVM,
 
 	pub state: RefCell<LLVMMutableState>,
-	pub function_state: RefCell<Option<LLVMFunctionState>>,
 }
 
 impl ops::Deref for LLVMBackend {
@@ -52,23 +70,25 @@ impl ops::DerefMut for LLVMBackend {
 	fn deref_mut (&mut self) -> &mut LLVM { &mut self.ll }
 }
 
+#[derive(Clone, Copy)]
 pub struct StackVal {
 	pub llvalue: LLVMValue,
 	pub lltype: LLVMType,
 	pub ir_idx: Option<usize>,
+	pub ty_key: TyKey,
 }
 
 impl StackVal {
-	pub fn new (llvalue: LLVMValue, lltype: LLVMType, ir_idx: Option<usize>) -> Self {
-		Self { llvalue, lltype, ir_idx }
+	pub fn new (llvalue: LLVMValue, lltype: LLVMType, ir_idx: Option<usize>, ty_key: TyKey) -> Self {
+		Self { llvalue, lltype, ir_idx, ty_key }
 	}
 
-	pub fn implicit (llvalue: LLVMValue, lltype: LLVMType) -> Self {
-		Self { llvalue, lltype, ir_idx: None }
+	pub fn implicit (llvalue: LLVMValue, lltype: LLVMType, ty_key: TyKey) -> Self {
+		Self { llvalue, lltype, ir_idx: None, ty_key }
 	}
 
-	pub fn source (llvalue: LLVMValue, lltype: LLVMType, ir_idx: usize) -> Self {
-		Self { llvalue, lltype, ir_idx: Some(ir_idx) }
+	pub fn source (llvalue: LLVMValue, lltype: LLVMType, ir_idx: usize, ty_key: TyKey) -> Self {
+		Self { llvalue, lltype, ir_idx: Some(ir_idx), ty_key }
 	}
 }
 
@@ -79,7 +99,6 @@ impl LLVMBackend {
 		let ll = LLVM::new(llvm_str!("UIR_MODULE"));
 
 		let state = RefCell::default();
-		let function_state = RefCell::default();
 
 		let ctx = RefCell::new(ctx);
 
@@ -88,7 +107,6 @@ impl LLVMBackend {
 			ctx,
 			ll,
 			state,
-			function_state,
 		})
 	}
 
@@ -132,51 +150,18 @@ impl LLVMBackend {
 		RefMut::map(self.state.borrow_mut(), |state| &mut state.target_signature_types)
 	}
 
-	pub fn stack (&self) -> Ref<Stack<StackVal>> {
-		Ref::map(self.state.borrow(), |state| &state.stack)
-	}
 
-	pub fn stack_mut (&self) -> RefMut<Stack<StackVal>> {
-		RefMut::map(self.state.borrow_mut(), |state| &mut state.stack)
-	}
-
-	pub fn active_fn (&self) -> Option<(LLVMValue, FunctionKey)> {
-		self.state.borrow().active_fn
-	}
-
-	pub fn set_active_fn (&self, xfn: (LLVMValue, FunctionKey)) -> Option<(LLVMValue, FunctionKey)> {
-		self.state.borrow_mut().active_fn.replace(xfn)
-	}
-
-	pub fn clear_active_fn (&self) -> Option<(LLVMValue, FunctionKey)> {
-		self.state.borrow_mut().active_fn.take()
-	}
-
-	pub fn active_block (&self) -> Option<(LLVMBlock, BlockKey)> {
-		self.state.borrow().active_block
-	}
-
-	pub fn set_active_block (&self, xblk: (LLVMBlock, BlockKey)) -> Option<(LLVMBlock, BlockKey)> {
-		self.state.borrow_mut().active_block.replace(xblk)
-	}
-
-	pub fn clear_active_block (&self) -> Option<(LLVMBlock, BlockKey)> {
-		self.state.borrow_mut().active_block.take()
-	}
-
-	pub fn ir (&self, ir_idx: usize) -> Option<Ref<Ir>> {
-		let (_, active_fn_key) = self.active_fn()?;
-		let (_, active_block_key) = self.active_block()?;
+	pub fn ir (&self, fstate: &mut LLVMFunctionState, ir_idx: usize) -> Option<Ref<Ir>> {
 
 		self
 			.ctx()
 			.and_then(|ctx|
 				ctx
-					.functions.get(active_fn_key)
-					.expect("valid active function")
+					.functions.get(fstate.fn_key)
+					.unwrap()
 
-					.block_data.get(active_block_key)
-					.expect("valid active block")
+					.block_data.get(fstate.block_key)
+					.unwrap()
 
 					.ir.get(ir_idx)
 			)
@@ -207,7 +192,7 @@ impl LLVMBackend {
 			return *llty
 		}
 
-		let ty = self.ctx().and_then(|ctx| ctx.tys.get(ty_key)).expect("valid ty key");
+		let ty = self.ctx().and_then(|ctx| ctx.tys.get(ty_key)).unwrap();
 
 		let llty = {
 			use TyData::*;
@@ -269,40 +254,42 @@ impl LLVMBackend {
 	}
 
 
-	pub fn emit_constant (&self, constant: &Constant) -> LLVMValue {
+	pub fn emit_constant (&self, constant: &Constant) -> (LLVMValue, LLVMType) {
 		use Constant::*;
 
 		match constant {
-			Null(ty_key) => LLVMValue::const_null(self.emit_ty(*ty_key)),
+			Null(ty_key) => { let ty = self.emit_ty(*ty_key); (LLVMValue::const_null(ty), ty) },
 
-			Bool(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::Bool), *val as _),
+			Bool(val) => { let ty = self.prim_ty(PrimitiveTy::Bool); (LLVMValue::const_int(ty, *val as _), ty) },
 
-			SInt8(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::SInt8), *val as _),
-			SInt16(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::SInt16), *val as _),
-			SInt32(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::SInt32), *val as _),
-			SInt64(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::SInt64), *val as _),
+			SInt8(val) => { let ty = self.prim_ty(PrimitiveTy::SInt8); (LLVMValue::const_int(ty, *val as _), ty) },
+			SInt16(val) => { let ty = self.prim_ty(PrimitiveTy::SInt16); (LLVMValue::const_int(ty, *val as _), ty) },
+			SInt32(val) => { let ty = self.prim_ty(PrimitiveTy::SInt32); (LLVMValue::const_int(ty, *val as _), ty) },
+			SInt64(val) => { let ty = self.prim_ty(PrimitiveTy::SInt64); (LLVMValue::const_int(ty, *val as _), ty) },
 
 			SInt128(val) => {
-				LLVMValue::const_int(
-					self.prim_ty(PrimitiveTy::SInt128),
+				let ty = self.prim_ty(PrimitiveTy::SInt128);
+				(LLVMValue::const_int(
+					ty,
 					*val as _
-				)
+				), ty)
 			}
 
-			UInt8(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::UInt8), *val as _),
-			UInt16(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::UInt16), *val as _),
-			UInt32(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::UInt32), *val as _),
-			UInt64(val) => LLVMValue::const_int(self.prim_ty(PrimitiveTy::UInt64), *val as _),
+			UInt8(val) => { let ty = self.prim_ty(PrimitiveTy::UInt8); (LLVMValue::const_int(ty, *val as _), ty) },
+			UInt16(val) => { let ty = self.prim_ty(PrimitiveTy::UInt16); (LLVMValue::const_int(ty, *val as _), ty) },
+			UInt32(val) => { let ty = self.prim_ty(PrimitiveTy::UInt32); (LLVMValue::const_int(ty, *val as _), ty) },
+			UInt64(val) => { let ty = self.prim_ty(PrimitiveTy::UInt64); (LLVMValue::const_int(ty, *val as _), ty) },
 
 			UInt128(val) =>  {
-				LLVMValue::const_int(
-					self.prim_ty(PrimitiveTy::UInt128),
+				let ty = self.prim_ty(PrimitiveTy::UInt128);
+				(LLVMValue::const_int(
+					ty,
 					*val
-				)
+				), ty)
 			}
 
-			Real32(val) => LLVMValue::const_real(self.prim_ty(PrimitiveTy::Real32), *val as _),
-			Real64(val) => LLVMValue::const_real(self.prim_ty(PrimitiveTy::Real64), *val),
+			Real32(val) => { let ty = self.prim_ty(PrimitiveTy::Real32); (LLVMValue::const_real(ty, *val as _), ty) },
+			Real64(val) => { let ty = self.prim_ty(PrimitiveTy::Real64); (LLVMValue::const_real(ty, *val), ty) },
 
 			Aggregate(_ty_key, _data) => {
 				todo!()
@@ -319,7 +306,7 @@ impl LLVMBackend {
 			return *llglobal
 		}
 
-		let global = self.ctx().and_then(|ctx| ctx.globals.get(global_key)).expect("valid global key");
+		let global = self.ctx().and_then(|ctx| ctx.globals.get(global_key)).unwrap();
 
 		let llty = self.emit_ty(global.ty);
 
@@ -332,7 +319,8 @@ impl LLVMBackend {
 		let llglobal = LLVMValue::create_global(self.module, llty, llname);
 
 		if let Some(init_const) = global.init.as_ref() {
-			let llinit = self.emit_constant(init_const);
+			let (llinit, llconst_ty) = self.emit_constant(init_const);
+			assert_eq!(llty, llconst_ty);
 
 			llglobal.set_global_initializer(llinit)
 		}
@@ -346,7 +334,7 @@ impl LLVMBackend {
 			return *llfunction
 		}
 
-		let function = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).expect("valid function key");
+		let function = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).unwrap();
 
 		let llty = self.emit_ty(function.ty);
 		let abi = self.abi_info(llty);
@@ -361,29 +349,349 @@ impl LLVMBackend {
 	}
 
 
-	pub fn emit_entry (&self) -> LLVMBlock {
-		let function_key = self.active_fn().expect("active function for emit_entry").1;
-		let function = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).expect("valid function key");
-		let llfunc = *self.function_map().get(&function_key).expect("initialized function");
-		debug_assert_eq!(self.active_fn().map(|x| x.0), Some(llfunc));
+	pub fn ir_ty (&self, fstate: &mut LLVMFunctionState, ir_idx: usize) -> TyKey {
+		fstate.func.ty_map.get(fstate.block_key, ir_idx)
+	}
 
-		let lltype = self.emit_ty(function.ty);
+	pub fn emit_function_body (&self, function_key: FunctionKey) -> LLVMValue {
+		let func = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).unwrap();
+
+		let llfunc = self.emit_function_decl(function_key);
+
+		let mut fstate = LLVMFunctionState::new(llfunc, function_key, &func);
+
+		let _entry = self.emit_entry(&mut fstate);
+
+		for &block_key in func.block_order.iter() {
+			let block = func.block_data.get(block_key).unwrap();
+			let name = block.name.as_deref().unwrap_or("$block");
+
+			let block = self.ll.append_basic_block(llfunc, Some(name));
+
+			fstate.blocks.insert(block_key, block);
+		}
+
+		let user_entry = *func.block_order.first().unwrap();
+		let lluser_entry = *fstate.blocks.get(&user_entry).unwrap();
+
+		self.ll.branch(lluser_entry);
+
+
+		let mut block_in_vals = HashMap::<BlockKey, Stack<StackVal>>::default();
+		let mut block_out_vals = HashMap::<BlockKey, Stack<StackVal>>::default();
+		for &block_key in func.block_order.iter() {
+			let llblock = *fstate.blocks.get(&block_key).unwrap();
+
+			fstate.llblock = llblock;
+			fstate.block_key = block_key;
+
+			let (in_vals, out_vals) = self.emit_block_body(&mut fstate);
+			block_in_vals.insert(block_key, in_vals);
+			block_out_vals.insert(block_key, out_vals);
+		}
+
+		for &block_key in func.block_order.iter() {
+			self.emit_block_terminator(&mut fstate, &block_in_vals, block_out_vals.remove(&block_key).unwrap())
+		}
+
+		llfunc
+	}
+
+	pub fn emit_block_body (&self, fstate: &mut LLVMFunctionState) -> (Stack<StackVal>, Stack<StackVal>) {
+		let block = fstate.func.block_data.get(fstate.block_key).unwrap();
+		self.position_at_end(fstate.llblock);
+
+		let mut iter = block.ir.iter().enumerate().peekable();
+
+		let mut in_vals = Stack::default();
+
+		while let Some((ir_idx, ir)) = iter.next() {
+			match &ir.data {
+				x if x.is_terminator() => unreachable!(),
+
+				IrData::Phi(ty_key) => {
+					let name = ir.name.as_deref().unwrap_or("phi");
+					let llty = self.emit_ty(*ty_key);
+					let phi = self.ll.phi(llty, Some(name));
+					let ty_key = self.ir_ty(fstate, ir_idx);
+
+					let stack_val = StackVal::source(phi, llty, ir_idx, ty_key);
+
+					in_vals.push(stack_val);
+					fstate.stack.push(stack_val)
+				}
+
+
+				IrData::Constant(constant) => {
+					let (llconst, llconst_ty) = self.emit_constant(constant);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llconst, llconst_ty, ir_idx, ty_key))
+				}
+
+
+				IrData::BuildAggregate(_ty_key, _aggregate_data) => { todo!() }
+
+
+				IrData::GlobalRef(gkey) => {
+					let global = self.ctx().and_then(|ctx| ctx.globals.get(*gkey)).unwrap();
+					let llg = self.emit_global(*gkey);
+					let llty = self.emit_ty(global.ty).as_pointer(0);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llg, llty, ir_idx, ty_key))
+				}
+
+				IrData::FunctionRef(fkey) => {
+					let function = self.ctx().and_then(|ctx| ctx.functions.get(*fkey)).unwrap();
+					let llf = self.emit_function_decl(*fkey);
+					let llty = self.emit_ty(function.ty).as_pointer(0);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llf, llty, ir_idx, ty_key))
+				}
+
+				IrData::BlockRef(bkey) => {
+					let llbb = *fstate.blocks.get(bkey).unwrap();
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llbb.as_value(), LLVMType::label(self.ll.ctx), ir_idx, ty_key))
+				}
+
+				IrData::ParamRef(pkey) => {
+					let llparam = *fstate.params.get(pkey).unwrap();
+					let llty = self.emit_ty(fstate.func.param_data.get(*pkey).unwrap().ty);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llparam, llty, ir_idx, ty_key))
+				}
+
+				IrData::LocalRef(lkey) => {
+					let llvar = *fstate.locals.get(lkey).unwrap();
+					let llty = self.emit_ty(fstate.func.locals.get(*lkey).unwrap().ty);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llvar, llty, ir_idx, ty_key))
+				}
+
+
+				IrData::BinaryOp(bin_op) => {
+					let a = fstate.stack.pop().unwrap();
+					let b = fstate.stack.pop().unwrap();
+
+					let ty = self.ctx().and_then(|ctx| ctx.tys.get(a.ty_key)).unwrap();
+
+					assert_eq!(a.lltype, b.lltype);
+
+					let (llvalue, lltype) = self.emit_bin_op(*bin_op, a, b, ty);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llvalue, lltype, ir_idx, ty_key))
+				}
+
+				IrData::UnaryOp(un_op) => {
+					let e = fstate.stack.pop().unwrap();
+
+					let ty = self.ctx().and_then(|ctx| ctx.tys.get(e.ty_key)).unwrap();
+
+					let (llvalue, lltype) = self.emit_un_op(*un_op, e, ty);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llvalue, lltype, ir_idx, ty_key))
+				}
+
+				IrData::CastOp(cast_op, target_ty_key) => {
+					let e = fstate.stack.pop().unwrap();
+
+					let ty = self.ctx().and_then(|ctx| ctx.tys.get(e.ty_key)).unwrap();
+					let target_ty = self.ctx().and_then(|ctx| ctx.tys.get(*target_ty_key)).unwrap();
+					let lltype = self.emit_ty(*target_ty_key);
+
+					let llvalue = self.emit_cast_op(*cast_op, e, ty, target_ty, lltype);
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llvalue, lltype, ir_idx, ty_key))
+				}
+
+				IrData::Gep(num_indices) => {
+					let ptr = fstate.stack.pop().unwrap();
+					assert!(ptr.lltype.is_pointer_kind());
+
+					let indices = (0..*num_indices).into_iter().map(|_| fstate.stack.pop().unwrap().llvalue).collect::<Vec<_>>();
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					let llty = self.emit_ty(ty_key);
+					let gep = self.ll.gep(llty, ptr.llvalue, &indices, None::<LLVMString>); // TODO: name geps
+					fstate.stack.push(StackVal::source(gep, llty, ir_idx, ty_key))
+				}
+
+				IrData::Load => {
+					let StackVal { lltype, llvalue, .. } = fstate.stack.pop().unwrap();
+					assert!(lltype.is_pointer_kind());
+					assert!(!lltype.get_element_type().is_function_kind()); // TODO: more robust unloadable type check?
+
+					let load = self.ll.load(llvalue, None::<LLVMString>); // TODO: name loads
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(load, lltype, ir_idx, ty_key))
+				}
+
+				IrData::Store => {
+					let StackVal { lltype: llptr_ty, llvalue: llptr, .. } = fstate.stack.pop().unwrap();
+					let StackVal { lltype: llval_ty, llvalue: llval, .. } = fstate.stack.pop().unwrap();
+					assert_eq!(llptr_ty.get_element_type(), llval_ty);
+
+					self.ll.store(llval, llptr);
+				}
+
+
+
+				IrData::Call => {
+					if let Some((llval, llty)) = self.emit_call(fstate) {
+						let ty_key = self.ir_ty(fstate, ir_idx);
+						fstate.stack.push(StackVal::source(llval, llty, ir_idx, ty_key))
+					}
+				}
+
+				IrData::Duplicate => {
+					let val = *fstate.stack.peek().unwrap();
+					fstate.stack.push(val);
+				}
+
+				IrData::Discard => {
+					fstate.stack.pop();
+				}
+
+				IrData::Swap => {
+					let a = fstate.stack.pop().unwrap();
+					let b = fstate.stack.pop().unwrap();
+					fstate.stack.push(b);
+					fstate.stack.push(a);
+				}
+
+
+				| IrData::Branch { .. }
+				| IrData::CondBranch { .. }
+				| IrData::Switch { .. }
+				| IrData::ComputedBranch { .. }
+				| IrData::Ret
+				| IrData::Unreachable
+				=> unreachable!()
+			}
+
+			if matches!(iter.peek(), Some((_, x)) if x.is_terminator()) {
+				assert!(ir_idx == block.ir.len() - 1);
+				return (in_vals, std::mem::take(&mut fstate.stack))
+			}
+		}
+
+		unreachable!()
+	}
+
+	pub fn emit_block_terminator (&self, fstate: &mut LLVMFunctionState, in_val_map: &HashMap<BlockKey, Stack<StackVal>>, mut out_vals: Stack<StackVal>) {
+		let block = fstate.func.block_data.get(fstate.block_key).unwrap();
+		self.position_at_end(fstate.llblock);
+
+		let term = block.ir.last().unwrap();
+
+		let fixup_phis = |dest, out_vals: &Stack<StackVal>| {
+			let in_vals = in_val_map.get(dest).unwrap();
+			assert_eq!(out_vals.len(), in_vals.len());
+
+			for (
+				&StackVal { llvalue: llphi, lltype: llin_ty, .. },
+				&StackVal { llvalue: llterm, lltype: llout_ty, .. },
+			) in in_vals.as_slice().iter().zip(out_vals.iter()) {
+				assert_eq!(llin_ty, llout_ty);
+
+				llphi.add_incoming(&[llterm], &[fstate.llblock])
+			}
+		};
+
+		match &term.data {
+			IrData::Branch(dest) => {
+				let lldest = *fstate.blocks.get(dest).unwrap();
+				self.ll.branch(lldest);
+
+				fixup_phis(dest, &out_vals);
+			}
+
+			IrData::CondBranch(a, b) => {
+				let StackVal { llvalue, .. } = out_vals.pop().unwrap();
+
+				let lla = *fstate.blocks.get(a).unwrap();
+				let llb = *fstate.blocks.get(b).unwrap();
+				self.ll.cond_branch(llvalue, lla, llb);
+
+				fixup_phis(a, &out_vals);
+				fixup_phis(b, &out_vals);
+			}
+
+			IrData::Switch(branches, default_block) => {
+				let lldefault = *fstate.blocks.get(default_block).unwrap();
+				let StackVal { llvalue, lltype, .. } = out_vals.pop().unwrap();
+				let switch = self.ll.switch(llvalue, lldefault, branches.len() as u32);
+				branches.iter().for_each(|(constant, block)| {
+					let (llconst, llconst_ty) = self.emit_constant(constant);
+					assert_eq!(llconst_ty, lltype);
+
+					let llblock = *fstate.blocks.get(block).unwrap();
+
+					switch.add_case(llconst, llblock);
+					fixup_phis(block, &out_vals);
+				});
+
+				fixup_phis(default_block, &out_vals);
+			}
+
+			IrData::ComputedBranch(dests) => {
+				let StackVal { llvalue, lltype, .. } = out_vals.pop().unwrap();
+
+				assert!(lltype == LLVMType::label(self.ll.ctx));
+
+				self.ll.indirect_branch(llvalue, dests.len() as u32);
+
+				dests.iter().for_each(|dest| fixup_phis(dest, &out_vals));
+			}
+
+			IrData::Ret => {
+				self.emit_return(fstate, out_vals);
+			}
+
+			IrData::Unreachable
+			=> {
+				assert!(out_vals.is_empty());
+				self.ll.unreachable();
+			}
+
+			| IrData::Phi { .. }
+			| IrData::Constant { .. }
+			| IrData::BuildAggregate { .. }
+			| IrData::GlobalRef { .. }
+			| IrData::FunctionRef { .. }
+			| IrData::BlockRef { .. }
+			| IrData::ParamRef { .. }
+			| IrData::LocalRef { .. }
+			| IrData::BinaryOp { .. }
+			| IrData::UnaryOp { .. }
+			| IrData::CastOp { .. }
+			| IrData::Gep { .. }
+			| IrData::Load
+			| IrData::Store
+			| IrData::Call
+			| IrData::Duplicate
+			| IrData::Discard
+			| IrData::Swap
+			=> unreachable!()
+		}
+	}
+
+
+	pub fn emit_entry (&self, fstate: &mut LLVMFunctionState) -> LLVMBlock {
+		let lltype = self.emit_ty(fstate.func.ty);
 		let abi = self.abi_info(lltype);
 
-		let entry = self.ll.append_basic_block(llfunc, Some(llvm_str!("entry")));
+		let entry = self.ll.append_basic_block(fstate.llfunc, Some(llvm_str!("entry")));
 		self.ll.position_at_end(entry);
 
-		let mut function_state = LLVMFunctionState::default();
-
-		let mut llparams = llfunc.get_params().into_iter();
+		let mut llparams = fstate.llfunc.get_params().into_iter();
 
 
 		if abi.result.kind == ArgKind::Indirect {
-			function_state.sret = Some(llparams.next().unwrap());
+			fstate.sret = Some(llparams.next().unwrap());
 		}
 
 
-	 	for (abi_arg, &param_key) in abi.args.iter().zip(function.param_order.iter()) {
+	 	for (abi_arg, &param_key) in abi.args.iter().zip(fstate.func.param_order.iter()) {
 			let param = match abi_arg.kind {
 				ArgKind::Direct => {
 					let llvalue = if let Some(ArgAttr::ZExt) = abi_arg.attribute {
@@ -416,13 +724,13 @@ impl LLVMBackend {
 				}
 			};
 
-			function_state.params.insert(param_key, param);
+			fstate.params.insert(param_key, param);
 		}
 
 
-		for (&local_key, local) in function.locals.iter() {
+		for (&local_key, local) in fstate.func.locals.iter() {
 			let lltype = self.emit_ty(local.ty);
-			function_state.locals.insert(local_key, self.alloca(lltype, None::<LLVMString>)); // TODO name locals
+			fstate.locals.insert(local_key, self.alloca(lltype, None::<LLVMString>)); // TODO name locals
 		}
 
 
@@ -430,23 +738,16 @@ impl LLVMBackend {
 	}
 
 
-	pub fn emit_return (&self) -> LLVMValue {
-		let function_key = self.active_fn().expect("active function for emit_return").1;
-		let function = self.ctx().and_then(|ctx| ctx.functions.get(function_key)).expect("valid function key");
-		let llfunc = *self.function_map().get(&function_key).expect("initialized function");
-		debug_assert_eq!(self.active_fn().map(|x| x.0), Some(llfunc));
-
-		let lltype = self.emit_ty(function.ty);
+	pub fn emit_return (&self, fstate: &mut LLVMFunctionState, mut stack: Stack<StackVal>) -> LLVMValue {
+		let lltype = self.emit_ty(fstate.func.ty);
 		let abi = self.abi_info(lltype);
 
-		let function_state = self.function_state.borrow().and_then(|f| f.as_ref()).unwrap();
-
-		match abi.result.kind {
+		let val = match abi.result.kind {
 			ArgKind::Direct => {
 				if abi.result.base_type == LLVMType::void(self.ll.ctx) {
 					self.ll.ret_void()
 				} else {
-					let StackVal { llvalue: base_llvalue, .. } = self.stack_mut().pop().expect("return value on stack");
+					let StackVal { llvalue: base_llvalue, .. } = stack.pop().unwrap();
 
 					let llvalue = if abi.result.attribute == Some(ArgAttr::ZExt) {
 						// TODO: this is currently only handling i1 -> i8
@@ -463,18 +764,23 @@ impl LLVMBackend {
 			}
 
 			ArgKind::Indirect => {
-				let StackVal { llvalue: base_llvalue, .. } = self.stack_mut().pop().expect("return value on stack");
-				self.store(base_llvalue, function_state.sret.unwrap());
+				let StackVal { llvalue: base_llvalue, .. } = fstate.stack.pop().unwrap();
+				self.store(base_llvalue, fstate.sret.unwrap());
 
 				self.ll.ret_void()
 			}
-		}
+		};
+
+		assert!(stack.is_empty());
+
+		val
 	}
 
 
 
-	fn emit_call (&self) -> LLVMValue {
-		let StackVal { llvalue, lltype, ir_idx } = self.stack_mut().pop().expect("function on stack");
+	fn emit_call (&self, fstate: &mut LLVMFunctionState) -> Option<(LLVMValue, LLVMType)> {
+		let StackVal { llvalue, lltype, ir_idx, ty_key: _ } = fstate.stack.pop().unwrap();
+
 
 		assert!(lltype.is_function_kind());
 
@@ -487,8 +793,8 @@ impl LLVMBackend {
 		let mut llargs: Vec<LLVMValue> = vec![];
 
 		for abi_arg in abi.args.iter().rev() {
-			let StackVal { lltype: base_lltype, llvalue: base_llvalue, ir_idx: _ }
-				= self.stack_mut().pop().expect("parameter for call");
+			let StackVal { lltype: base_lltype, llvalue: base_llvalue, ir_idx: _, ty_key: _ }
+				= fstate.stack.pop().unwrap();
 
 			assert_eq!(base_lltype, abi_arg.base_type);
 
@@ -529,7 +835,7 @@ impl LLVMBackend {
 		if abi.result.kind == ArgKind::Indirect {
 			let name =
 				ir_idx
-					.and_then(|i| self.ir(i).and_then(|j| j.and_then(|k| k.name.as_ref())))
+					.and_then(|i| self.ir(fstate, i).and_then(|j| j.and_then(|k| k.name.as_ref())))
 					.map(|name| format!("$alloca(sret {})", name))
 					.unwrap_or_else(|| format!("$alloca(sret anon {})", abi.result.base_type));
 
@@ -539,12 +845,12 @@ impl LLVMBackend {
 		}
 
 
-		let name = ir_idx.and_then(|i| self.ir(i)).and_then(|j| j.name.clone());
+		let name = ir_idx.and_then(|i| self.ir(fstate, i)).and_then(|j| j.name.clone());
 
 		llargs.reverse();
 		let result = self.ll.call(abi.lltype, llvalue, llargs.as_slice(), name);
 
-		if abi.result.base_type.is_void_kind() { return result }
+		if abi.result.base_type.is_void_kind() { return None }
 
 		let (llvalue, lltype) = match abi.result.kind {
 			ArgKind::Indirect => {
@@ -561,10 +867,166 @@ impl LLVMBackend {
 			}
 		};
 
-		self.stack_mut().push(StackVal::new(llvalue, lltype, ir_idx));
+		Some((llvalue, lltype))
+	}
 
 
-		llvalue
+
+	fn emit_bin_op (&self, bin_op: BinaryOp, a: StackVal, b: StackVal, ty: Ref<Ty>) -> (LLVMValue, LLVMType) {
+		use BinaryOp::*;
+
+
+		match bin_op {  // TODO: name bin ops
+			Add if ty.is_int()
+			=> (self.ll.iadd(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Sub if ty.is_int()
+			=> (self.ll.isub(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Mul if ty.is_int()
+			=> (self.ll.imul(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Div if ty.is_int()
+			=> (self.ll.idiv(ty.is_signed(), a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Rem if ty.is_int()
+			=> (self.ll.irem(ty.is_signed(), a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+
+
+
+			Add if ty.is_real()
+			=> (self.ll.fadd(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Sub if ty.is_real()
+			=> (self.ll.fsub(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Mul if ty.is_real()
+			=> (self.ll.fmul(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Div if ty.is_real()
+			=> (self.ll.fdiv(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			Rem if ty.is_real()
+			=> (self.ll.frem(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+
+
+
+
+			Eq if ty.is_bool() || ty.is_int()
+			=> (self.ll.icmp(LLVMIntEQ, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Ne if ty.is_bool() || ty.is_int()
+			=> (self.ll.icmp(LLVMIntNE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+
+			Eq if ty.is_real()
+			=> (self.ll.fcmp(LLVMRealUEQ, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Ne if ty.is_real()
+			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+
+			Eq if ty.is_pointer() => {
+				let intptr = LLVMType::int(self.ll.ctx, self.abi.word_bits());
+				let lla = self.ll.bitcast(a.llvalue, intptr, None::<LLVMString>);
+				let llb = self.ll.bitcast(b.llvalue, intptr, None::<LLVMString>);
+				(self.ll.icmp(LLVMIntEQ, lla, llb, None::<LLVMString>), LLVMType::int1(self.ll.ctx))
+			}
+			Ne if ty.is_pointer() => {
+				let intptr = LLVMType::int(self.ll.ctx, self.abi.word_bits());
+				let lla = self.ll.bitcast(a.llvalue, intptr, None::<LLVMString>);
+				let llb = self.ll.bitcast(b.llvalue, intptr, None::<LLVMString>);
+				(self.ll.icmp(LLVMIntNE, lla, llb, None::<LLVMString>), LLVMType::int1(self.ll.ctx))
+			}
+
+			Eq if ty.is_function() => { todo!() } // TODO: function comparison
+			Ne if ty.is_function() => { todo!() }
+
+
+
+			Lt if ty.is_int()
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLT } else { LLVMIntULT }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Gt if ty.is_int()
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGT } else { LLVMIntUGT }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Le if ty.is_int()
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLE } else { LLVMIntULE }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Ge if ty.is_int()
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGE } else { LLVMIntUGE }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+
+			Lt if ty.is_real()
+			=> (self.ll.fcmp(LLVMRealOLT, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Gt if ty.is_real()
+			=> (self.ll.fcmp(LLVMRealOGT, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Le if ty.is_real()
+			=> (self.ll.fcmp(LLVMRealOLE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			Ge if ty.is_real()
+			=> (self.ll.fcmp(LLVMRealOGE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+
+
+			LAnd if ty.is_bool()
+			=> (self.ll.and(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			LOr if ty.is_bool()
+			=> (self.ll.or(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+
+
+			BAnd if ty.is_int()
+			=> (self.ll.and(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			BOr if ty.is_int()
+			=> (self.ll.or(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			BXor
+			=> (self.ll.xor(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+
+			LSh
+			=> (self.ll.l_shift(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			RShA
+			=> (self.ll.arithmetic_r_shift(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			RShL
+			=> (self.ll.logical_r_shift(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+
+			_ => unreachable!()
+		}
+	}
+
+
+	fn emit_un_op (&self, un_op: UnaryOp, e: StackVal, ty: Ref<Ty>) -> (LLVMValue, LLVMType) {
+		use UnaryOp::*;
+
+		match un_op {
+			Neg if ty.is_sint()
+			=> (self.ll.ineg(e.llvalue, None::<LLVMString>), e.lltype),
+
+			Neg if ty.is_real()
+			=> (self.ll.fneg(e.llvalue, None::<LLVMString>), e.lltype),
+
+			LNot if ty.is_bool()
+			=> (self.ll.not(e.llvalue, None::<LLVMString>), e.lltype),
+
+			BNot if ty.is_int()
+			=> (self.ll.not(e.llvalue, None::<LLVMString>), e.lltype),
+
+
+			_ => unreachable!()
+		}
+	}
+
+	fn emit_cast_op (&self, cast_op: CastOp, e: StackVal, ty: Ref<Ty>, target_ty: Ref<Ty>, lltgt_ty: LLVMType) -> LLVMValue {
+		use CastOp::*;
+
+		match cast_op {
+			IntToReal if ty.is_int() && target_ty.is_real()
+			=> self.ll.i2f(ty.is_signed(), e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			RealToInt if ty.is_real() && target_ty.is_int()
+			=> self.ll.f2i(target_ty.is_signed(), e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			ZeroExtend if ty.is_int() && target_ty.is_int()
+			=> self.ll.zext(e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			SignExtend if ty.is_int() && target_ty.is_int()
+			=> self.ll.sext(e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			RealExtend if ty.is_real() && target_ty.is_real()
+			=> self.ll.fext(e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			Truncate if ty.is_int() && target_ty.is_int()
+			=> self.ll.itrunc(e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			RealTruncate if ty.is_real() && target_ty.is_real()
+			=> self.ll.ftrunc(e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			Bitcast
+			=> self.ll.bitcast(e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			_ => unreachable!()
+		}
 	}
 }
 
@@ -858,3 +1320,26 @@ typedef unsigned long uint64_ty;
 		}
 	}
 }
+
+// #[repr(u8)]
+// #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// enum StackOp { Pop, Push }
+
+// struct State {
+// 	len: usize,
+// 	mem: Vec<u128>,
+// }
+
+
+// impl StackOp {
+//   fn to_bit (self, i: u8) -> u8 { (self as u8) << i }
+//   fn to_byte (arr: [StackOp; 8]) -> u8 {
+// 		arr.iter().enumerate().fold(0, |acc, (i, op)| acc | op.to_bit(i as u8))
+// 	}
+// }
+
+// impl State {
+// 	fn op (&mut self, op: StackOp) -> State {
+
+// 	}
+// }

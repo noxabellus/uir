@@ -215,6 +215,9 @@ impl Function {
 
 pub trait Abi: Target {
 	fn get_info (&self, context: LLVMContextRef, args: &[LLVMType], ret_ty: LLVMType) -> Function;
+	fn word_bits (&self) -> u32 {
+		self.word_size() as u32 * 8
+	}
 }
 
 pub fn get_abi (t: &dyn Target) -> Option<Box<dyn Abi>> {

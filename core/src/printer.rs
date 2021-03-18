@@ -1003,7 +1003,7 @@ impl<'data, 'ctx> fmt::Display for IrDataPrinter<'data, 'ctx> {
 
 			IrData::Branch(destination) => { write!(f, "branch {}", self.child(destination)) }
 			IrData::CondBranch(then_block_key, else_block_key) => { write!(f, "cond_branch {} {}", self.child(then_block_key), self.child(else_block_key)) }
-			IrData::Switch(cases) => { write!(f, "switch ({})", self.pair_list(cases.as_slice())) }
+			IrData::Switch(cases, default) => { write!(f, "switch (cases: {} default: {})", self.pair_list(cases.as_slice()), self.child(default)) }
 			IrData::ComputedBranch(destinations) => { write!(f, "computed_branch ({})", self.list(destinations.as_slice())) }
 
 			IrData::Call => { write!(f, "call") }

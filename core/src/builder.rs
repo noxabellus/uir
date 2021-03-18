@@ -924,11 +924,12 @@ impl<'c> Builder<'c> {
 
 		for &function_key in functions {
 			let cfg = cfg_generator::generate(self, function_key)?;
-			let cfg = ty_checker::check_function(self, cfg, function_key)?;
+			let (cfg, ty_map) = ty_checker::check_function(self, cfg, function_key)?;
 
 			let mut function = self.get_function_mut(function_key).unwrap();
 
 			function.cfg = cfg;
+			function.ty_map = ty_map;
 		}
 
 		Ok(())
@@ -1023,10 +1024,11 @@ impl<'b> FunctionBuilder<'b> {
 		match cfg_generator::generate(builder, function_key) {
 			Ok(cfg) => {
 				match ty_checker::check_function(builder, cfg, function_key) {
-					Ok(cfg) => {
+					Ok((cfg, ty_map)) => {
 						let mut function = builder.get_function_mut(function_key).unwrap();
 
 						function.cfg = cfg;
+						function.ty_map = ty_map;
 
 						(function, Ok(()))
 					}
@@ -1711,8 +1713,8 @@ impl<'b> FunctionBuilder<'b> {
 		self.write_node(IrData::CondBranch(then_block, else_block))
 	}
 
-	pub fn switch (&mut self, case_blocks: Vec<(Constant, BlockKey)>) -> IrManipulator {
-		self.write_node(IrData::Switch(case_blocks))
+	pub fn switch (&mut self, case_blocks: Vec<(Constant, BlockKey)>, default_block: BlockKey) -> IrManipulator {
+		self.write_node(IrData::Switch(case_blocks, default_block))
 	}
 
 	pub fn computed_branch (&mut self, destinations: Vec<BlockKey>) -> IrManipulator {

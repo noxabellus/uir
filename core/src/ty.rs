@@ -115,8 +115,8 @@ impl TyData {
 	pub fn is_uint (&self) -> bool { matches!(self, Self::Primitive(PrimitiveTy::UInt8) | Self::Primitive(PrimitiveTy::UInt16) | Self::Primitive(PrimitiveTy::UInt32) | Self::Primitive(PrimitiveTy::UInt64) | Self::Primitive(PrimitiveTy::UInt128)) }
 	pub fn is_int (&self) -> bool { self.is_sint() || self.is_uint() }
 	pub fn is_real (&self) -> bool { matches!(self, Self::Primitive(PrimitiveTy::Real32) | Self::Primitive(PrimitiveTy::Real64)) }
-	pub fn is_arithmetic (&self) -> bool { self.is_int() || self.is_real() || self.is_pointer() }
-	pub fn has_equality (&self) -> bool { self.is_arithmetic() || self.is_bool() || self.is_function() }
+	pub fn is_arithmetic (&self) -> bool { self.is_int() || self.is_real() }
+	pub fn has_equality (&self) -> bool { self.is_pointer() || self.is_arithmetic() || self.is_bool() || self.is_function() }
 	pub fn is_signed (&self) -> bool { self.is_sint() || self.is_real() }
 	pub fn is_pointer (&self) -> bool { matches!(self, Self::Pointer { .. }) }
 	pub fn is_array (&self) -> bool { matches!(self, Self::Array { .. }) }

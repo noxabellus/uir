@@ -7,6 +7,7 @@ use super::{
 	src::{Src, SrcAttribution, SrcKey},
 	target::Target,
 	ty::{Ty, TyKey, TyMeta, TyMetaKey},
+	ty_checker::TyMap,
 };
 
 support::slotmap_keyable! {
@@ -58,6 +59,8 @@ pub enum CastOp {
 	RealToInt,
 	ZeroExtend,
 	SignExtend,
+	RealExtend,
+	RealTruncate,
 	Truncate,
 	Bitcast,
 }
@@ -105,7 +108,9 @@ impl fmt::Display for CastOp {
 			CastOp::RealToInt => write!(f, "real_to_int"),
 			CastOp::ZeroExtend => write!(f, "zero_extend"),
 			CastOp::SignExtend => write!(f, "sign_extend"),
+			CastOp::RealExtend => write!(f, "real_extend"),
 			CastOp::Truncate => write!(f, "truncate"),
+			CastOp::RealTruncate => write!(f, "real_truncate"),
 			CastOp::Bitcast => write!(f, "bitcast"),
 		}
 	}
@@ -192,7 +197,7 @@ pub enum IrData {
 
 	Branch(BlockKey),
 	CondBranch(BlockKey, BlockKey),
-	Switch(Vec<(Constant, BlockKey)>),
+	Switch(Vec<(Constant, BlockKey)>, BlockKey),
 	ComputedBranch(Vec<BlockKey>),
 
 	Call,
@@ -212,8 +217,15 @@ impl Default for IrData {
 }
 
 impl IrData {
-	pub fn is_phi (&self) -> bool {
+	pub fn is_init (&self) -> bool {
 		matches!(self, IrData::Phi(_))
+	}
+
+	pub fn as_init_ty_key (&self) -> Option<TyKey> {
+		match self {
+			IrData::Phi(ty_key) => Some(*ty_key),
+			_ => None
+		}
 	}
 
 	pub fn is_terminator (&self) -> bool {
@@ -246,10 +258,12 @@ impl IrData {
 				f(*else_dest)?;
 			}
 
-			Switch(cases) => {
+			Switch(cases, default) => {
 				for (_, dest) in cases.iter() {
 					f(*dest)?;
 				}
+
+				f(*default)?;
 			}
 
 			ComputedBranch(dests) => {
@@ -360,6 +374,7 @@ pub struct Block {
 pub struct Function {
 	pub name: Option<String>,
 	pub ty: TyKey,
+	pub ty_map: TyMap,
 	pub block_data: Slotmap<BlockKey, Block>,
 	pub block_order: Vec<BlockKey>,
 	pub result: Option<TyKey>,

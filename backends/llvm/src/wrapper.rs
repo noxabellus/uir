@@ -1,7 +1,8 @@
 use std::fmt;
 
 pub use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, LLVMValueKind, LLVMValueKind::*, core::*, prelude::*};
-
+pub use llvm_sys::{LLVMIntPredicate, LLVMIntPredicate::*,};
+pub use llvm_sys::{LLVMRealPredicate, LLVMRealPredicate::*,};
 
 pub const LLVMOk: LLVMBool = 0;
 pub const LLVMFalse: LLVMBool = 0;
@@ -72,18 +73,18 @@ macro_rules! llvm_str {
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LLVMType(LLVMTypeRef);
-// impl Default for LLVMType { fn default () -> Self { Self(std::ptr::null_mut()) } }
+impl Default for LLVMType { fn default () -> Self { Self(std::ptr::null_mut()) } }
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LLVMValue(LLVMValueRef);
-// impl Default for LLVMValue { fn default () -> Self { Self(std::ptr::null_mut()) } }
+impl Default for LLVMValue { fn default () -> Self { Self(std::ptr::null_mut()) } }
 
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LLVMBlock(LLVMBasicBlockRef);
-// impl Default for LLVMBlock { fn default () -> Self { Self(std::ptr::null_mut()) } }
+impl Default for LLVMBlock { fn default () -> Self { Self(std::ptr::null_mut()) } }
 
 impl From<LLVMTypeRef> for LLVMType {
 	fn from(r: LLVMTypeRef) -> LLVMType {
@@ -218,6 +219,12 @@ impl fmt::Debug for LLVMValue {
 	}
 }
 
+
+impl LLVMBlock {
+	pub fn as_value (self) -> LLVMValue {
+		unsafe { LLVMBasicBlockAsValue(self.into()).into() }
+	}
+}
 
 impl LLVMType {
 	pub fn of (value: impl Into<LLVMValueRef>) -> LLVMType {
@@ -502,6 +509,17 @@ impl LLVMValue {
 
 		buf
 	}
+
+	pub fn add_incoming (self, incoming_values: &[LLVMValue], incoming_blocks: &[LLVMBlock]) {
+		assert_eq!(incoming_values.len(), incoming_blocks.len());
+
+		// TODO: assert this is a phi node
+		unsafe { LLVMAddIncoming(self.into(), incoming_values.as_ptr() as _, incoming_blocks.as_ptr() as _, incoming_values.len() as _) }
+	}
+
+	pub fn add_case (self, predicate: LLVMValue, body: LLVMBlock) {
+		unsafe { LLVMAddCase(self.into(), predicate.into(), body.into()) }
+	}
 }
 
 
@@ -528,6 +546,8 @@ impl LLVM {
 	}
 
 
+
+
 	pub fn append_basic_block (&self, function: impl Into<LLVMValueRef>, name: Option<impl Into<LLVMString>>) -> LLVMBlock {
 		unsafe { LLVMAppendBasicBlockInContext(self.ctx, function.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
 	}
@@ -536,6 +556,179 @@ impl LLVM {
 		unsafe { LLVMPositionBuilderAtEnd(self.builder, bb.into()) }
 	}
 
+
+
+	pub fn gep (&self, ty: LLVMType, ptr: LLVMValue, indices: &[LLVMValue], name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildGEP2(
+			self.builder,
+			ty.into(), ptr.into(),
+			indices.as_ptr() as _,
+			indices.len() as _,
+			name.map(Into::into).unwrap_or_default().as_ptr()
+		).into() }
+	}
+
+
+
+	pub fn i2f (&self, signed: bool, e: LLVMValue, new_ty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		let to = if signed { LLVMBuildSIToFP } else { LLVMBuildUIToFP };
+		unsafe { (to)(self.builder, e.into(), new_ty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn f2i (&self, signed: bool, e: LLVMValue, new_ty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		let to = if signed { LLVMBuildFPToSI } else { LLVMBuildFPToUI };
+		unsafe { (to)(self.builder, e.into(), new_ty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn itrunc (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildTrunc(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn ftrunc (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFPTrunc(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn fext (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFPExt(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn zext (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildZExt(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn sext (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildSExt(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn trunc_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildTruncOrBitCast(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn zext_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildZExtOrBitCast(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildBitCast(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+
+	pub fn not (&self, e: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildNot(self.builder, e.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+
+	pub fn and (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildAnd(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn or (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildOr(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn xor (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildXor(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn logical_r_shift (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildLShr(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn arithmetic_r_shift (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildAShr(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn l_shift (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildShl(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+
+
+	pub fn icmp (&self, pred: LLVMIntPredicate, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildICmp(self.builder, pred, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn ineg (&self, e: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildNeg(self.builder, e.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn iadd (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildAdd(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn isub (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildSub(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn imul (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildMul(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn idiv (&self, signed: bool, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		let func = if signed { LLVMBuildSDiv } else { LLVMBuildUDiv };
+		unsafe { (func)(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn irem (&self, signed: bool, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		let func = if signed { LLVMBuildSRem } else { LLVMBuildURem };
+		unsafe { (func)(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+
+	pub fn fcmp (&self, pred: LLVMRealPredicate, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFCmp(self.builder, pred, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn fneg (&self, e: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFNeg(self.builder, e.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+
+	pub fn fadd (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFAdd(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn fsub (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFSub(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn fmul (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFMul(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn fdiv (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFDiv(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn frem (&self, a: LLVMValue, b: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildFRem(self.builder, a.into(), b.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+
+
+	pub fn phi (&self, ty: impl Into<LLVMTypeRef>, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildPhi(self.builder, ty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	}
+
+	pub fn unreachable (&self) -> LLVMValue {
+		unsafe { LLVMBuildUnreachable(self.builder).into() }
+	}
+
+	pub fn indirect_branch (&self, dest: LLVMValue, num_dests: u32) -> LLVMValue {
+		unsafe { LLVMBuildIndirectBr(self.builder, dest.into(), num_dests).into() }
+	}
+
+	pub fn switch (&self, cond: LLVMValue, default: LLVMBlock, num_cases: u32) -> LLVMValue {
+		unsafe { LLVMBuildSwitch(self.builder, cond.into(), default.into(), num_cases).into() }
+	}
+
+	pub fn cond_branch (&self, cond: LLVMValue, a: LLVMBlock, b: LLVMBlock) -> LLVMValue {
+		unsafe { LLVMBuildCondBr(self.builder, cond.into(), a.into(), b.into()).into() }
+	}
+
+	pub fn branch (&self, dest: LLVMBlock) -> LLVMValue {
+		unsafe { LLVMBuildBr(self.builder, dest.into()).into() }
+	}
 
 	pub fn ret (&self, ret_val: impl Into<LLVMValueRef>) -> LLVMValue {
 		unsafe { LLVMBuildRet(self.builder, ret_val.into()).into() }
@@ -553,14 +746,6 @@ impl LLVM {
 
 	pub fn extract_value (&self, llval: LLVMValue, idx: u32, name: Option<impl Into<LLVMString>>) -> LLVMValue {
 		unsafe { LLVMBuildExtractValue(self.builder, llval.into(), idx, name.map(Into::into).unwrap_or_default().as_ptr()).into() }
-	}
-
-	pub fn trunc_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildTruncOrBitCast(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
-	}
-
-	pub fn zext_or_bitcast (&self, llval: LLVMValue, llty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildZExtOrBitCast(self.builder, llval.into(), llty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
 	}
 
 	pub fn load (&self, llptr: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMValue {
