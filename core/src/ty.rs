@@ -2,7 +2,7 @@ use std::{ fmt, cell::RefCell, ops };
 
 use super::{
 	src::SrcAttribution,
-	ir::{ UnaryOp, BinaryOp, CastOp, BlockKey },
+	ir::{ UnaryOp, BinaryOp, CastOp, BlockKey, Constant, },
 };
 
 
@@ -14,6 +14,7 @@ pub enum TyErr {
 	StackUnderflow,
 	ExpectedConstant,
 	GepNoIndices,
+	TypeHasNoNull(TyKey),
 	PhiMissingInPredecessor(BlockKey),
 	PhiTypeMismatch(BlockKey, TyKey, TyKey),
 	PhiNoPredecessors(BlockKey),
@@ -23,7 +24,7 @@ pub enum TyErr {
 	GepInvalidSubElement(usize, TyKey),
 	GepImplicitLoad(usize, TyKey),
 	GepInvalidIndex(usize, TyKey),
-	GepOutOfBounds(usize, TyKey, u64, u64),
+	GepOutOfBounds(usize, TyKey, u32, u32),
 	ExpectedTy(TyKey, TyKey),
 	ExpectedArray(TyKey),
 	ExpectedStructure(TyKey),
@@ -34,10 +35,10 @@ pub enum TyErr {
 	ExpectedAggregateTy(TyKey),
 	ExpectedInteger(TyKey),
 	InvalidSwitchTy(TyKey),
-	DuplicateAggregateIndex(usize, usize, u64),
-	InvalidAggregateIndex(TyKey, u64),
-	MissingAggregateElement(TyKey, u64),
-	ExpectedAggregateElementTy(TyKey, u64, TyKey, TyKey),
+	DuplicateAggregateIndex(usize, usize, u32),
+	InvalidAggregateIndex(TyKey, u32),
+	MissingAggregateElement(TyKey, u32),
+	ExpectedAggregateElementTy(TyKey, u32, TyKey, TyKey),
 	BinaryOpTypeMismatch(TyKey, TyKey),
 	BinaryOpInvalidOperandTy(BinaryOp, TyKey),
 	UnaryOpInvalidOperandTy(UnaryOp, TyKey),
@@ -56,7 +57,49 @@ pub enum PrimitiveTy {
 }
 
 impl PrimitiveTy {
-	pub fn size (&self) -> usize {
+	pub fn const_from_int (self, int: usize) -> Constant {
+		match self {
+			PrimitiveTy::Bool => Constant::Bool(int != 0),
+
+			PrimitiveTy::SInt8   => Constant::SInt8(int as _),
+			PrimitiveTy::SInt16  => Constant::SInt16(int as _),
+			PrimitiveTy::SInt32  => Constant::SInt32(int as _),
+			PrimitiveTy::SInt64  => Constant::SInt64(int as _),
+			PrimitiveTy::SInt128 => Constant::SInt128(int as _),
+
+			PrimitiveTy::UInt8   => Constant::UInt8(int as _),
+			PrimitiveTy::UInt16  => Constant::UInt16(int as _),
+			PrimitiveTy::UInt32  => Constant::UInt32(int as _),
+			PrimitiveTy::UInt64  => Constant::UInt64(int as _),
+			PrimitiveTy::UInt128 => Constant::UInt128(int as _),
+
+			PrimitiveTy::Real32 => Constant::Real32(int as _),
+			PrimitiveTy::Real64 => Constant::Real64(int as _),
+		}
+	}
+
+	pub fn const_zero (self) -> Constant {
+		match self {
+			PrimitiveTy::Bool => Constant::Bool(false),
+
+			PrimitiveTy::SInt8   => Constant::SInt8(0),
+			PrimitiveTy::SInt16  => Constant::SInt16(0),
+			PrimitiveTy::SInt32  => Constant::SInt32(0),
+			PrimitiveTy::SInt64  => Constant::SInt64(0),
+			PrimitiveTy::SInt128 => Constant::SInt128(0),
+
+			PrimitiveTy::UInt8   => Constant::UInt8(0),
+			PrimitiveTy::UInt16  => Constant::UInt16(0),
+			PrimitiveTy::UInt32  => Constant::UInt32(0),
+			PrimitiveTy::UInt64  => Constant::UInt64(0),
+			PrimitiveTy::UInt128 => Constant::UInt128(0),
+
+			PrimitiveTy::Real32 => Constant::Real32(0.),
+			PrimitiveTy::Real64 => Constant::Real64(0.),
+		}
+	}
+
+	pub fn size (self) -> usize {
 		use PrimitiveTy::*;
 		match self {
 			Bool | SInt8 | UInt8 => 1,
@@ -66,7 +109,8 @@ impl PrimitiveTy {
 			SInt128 | UInt128 => 16,
 		}
 	}
-	pub fn as_str (&self) -> &'static str {
+
+	pub fn as_str (self) -> &'static str {
 		use PrimitiveTy::*;
 		match self {
 			Bool => "bool",
@@ -99,7 +143,7 @@ pub enum TyData {
 	Block,
 	Primitive(PrimitiveTy),
 	Pointer { target_ty: TyKey },
-	Array { length: u64, element_ty: TyKey },
+	Array { length: u32, element_ty: TyKey },
 	Structure { field_tys: Vec<TyKey> },
 	Function { parameter_tys: Vec<TyKey>, result_ty: Option<TyKey> },
 }
@@ -107,6 +151,13 @@ pub enum TyData {
 impl Default for TyData { fn default () -> Self { Self::Void } }
 
 impl TyData {
+	pub fn const_from_int (&self, int: usize) -> Option<Constant> {
+		Some(match self {
+			TyData::Primitive(prim) => prim.const_from_int(int),
+			_ => return None
+		})
+	}
+
 	pub fn is_block (&self) -> bool { matches!(self, Self::Block) }
 	pub fn is_primitive (&self) -> bool { matches!(self, Self::Primitive(_)) }
 	pub fn is_void (&self) -> bool { matches!(self, Self::Void) }
@@ -135,6 +186,7 @@ impl TyData {
 			  Self::Primitive { .. }
 			| Self::Pointer { .. }
 			| Self::Function { .. }
+			| Self::Block { .. }
 		)
 	}
 }
@@ -155,15 +207,15 @@ impl fmt::Display for TyMeta {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Layout {
-	pub size: u64,
-	pub align: u64,
-	pub field_offsets: Vec<u64>,
+	pub size: u32,
+	pub align: u32,
+	pub field_offsets: Vec<u32>,
 }
 
 impl Layout {
-	pub fn custom_scalar (size: u64, align: u64) -> Self { Self { size, align, field_offsets: vec![] } }
-	pub fn scalar (size: u64) -> Self { Self { size, align: size, field_offsets: vec![] } }
-	pub fn structure (size: u64, align: u64, field_offsets: Vec<u64>) -> Self { Self { size, align, field_offsets } }
+	pub fn custom_scalar (size: u32, align: u32) -> Self { Self { size, align, field_offsets: vec![] } }
+	pub fn scalar (size: u32) -> Self { Self { size, align: size, field_offsets: vec![] } }
+	pub fn structure (size: u32, align: u32, field_offsets: Vec<u32>) -> Self { Self { size, align, field_offsets } }
 }
 
 #[derive(Debug, Default)]

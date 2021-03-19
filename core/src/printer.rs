@@ -13,7 +13,6 @@ use support::{
 use super::{
 	builder::{
 		IrErr,
-		IrResult,
 		IrErrData,
 		IrErrLocation,
 		FunctionErrLocation
@@ -94,14 +93,14 @@ impl<'ctx> PrinterState<'ctx> {
 		self
 	}
 
-	pub fn with_result (mut self, result: IrResult) -> Self {
-		match result {
-			Ok(()) => {
+	pub fn with_error (mut self, error: Option<IrErr>) -> Self {
+		match error {
+			None => {
 				self.clear_err_data();
 				self.clear_err_location();
 			}
 
-			Err(IrErr { data, location }) => {
+			Some(IrErr { data, location }) => {
 				self.set_err_data(data);
 				self.set_err_location(location);
 			}
@@ -813,8 +812,7 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 			write!(f, " :#{}", self.child(meta))?;
 		}
 
-		writeln!(f)?;
-		self.incr_indent();
+		write!(f, " ")?;
 
 		match &self.0.data {
 			TyData::Void => { writeln!(f, "{}(void)", self.indent()) }
@@ -824,11 +822,11 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 			TyData::Array { length, element_ty } => { writeln!(f, "{}(array {} {})", self.indent(), length, self.child(element_ty)) }
 
 			TyData::Structure { field_tys } => {
-				writeln!(f, "{}(struct {})", self.indent(), self.list(field_tys.as_slice()))
+				write!(f, "(struct {})", self.list(field_tys.as_slice()))
 			}
 
 			TyData::Function { parameter_tys, result_ty } => {
-				writeln!(f, "{}(function", self.indent())?;
+				writeln!(f, "(function")?;
 				self.incr_indent();
 
 
@@ -843,16 +841,21 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 					write!(f, "(")?;
 				}
 
-				writeln!(f, ")")?;
+				write!(f, ")")?;
 
 
-				self.decr_indent();
 				writeln!(f, "{})", self.indent())
 			}
 		}?;
 
-		self.decr_indent();
-		write!(f, "{})", self.indent())
+		write!(f, ")")?;
+
+
+		if matches!(self.state().err_location, IrErrLocation::Ty(key) if key == self.0.as_key()) {
+			writeln!(f, "\n{}", self.child(self.state().err_data.as_ref()))?;
+		}
+
+		Ok(())
 	}
 }
 
@@ -925,7 +928,7 @@ impl<'data, 'ctx> fmt::Display for ConstantAggregateDataPrinter<'data, 'ctx> {
 			ConstantAggregateData::Zeroed => { write!(f, "zeroed") }
 			ConstantAggregateData::CopyFill(box_constant) => { write!(f, "(copy_fill ({}))", self.child(box_constant.as_ref())) }
 			ConstantAggregateData::Indexed(indexed_elements) => { write!(f, "(indexed ({}))", self.pair_list(indexed_elements.as_slice())) }
-			ConstantAggregateData::Complete(constants) => { write!(f, "(compete ({}))", self.list(constants.as_slice())) }
+			ConstantAggregateData::Complete(constants) => { write!(f, "(complete ({}))", self.list(constants.as_slice())) }
 		}
 	}
 }
@@ -956,7 +959,7 @@ impl<'data, 'ctx> fmt::Display for AggregateDataPrinter<'data, 'ctx> {
 
 			AggregateData::Indexed(indices) => { write!(f, "(indexed ({}))", self.list(indices.as_slice())) }
 
-			AggregateData::Complete => { write!(f, "compete") }
+			AggregateData::Complete => { write!(f, "complete") }
 		}
 	}
 }
@@ -1166,6 +1169,7 @@ impl<'data, 'ctx> fmt::Display for TyErrPrinter<'data, 'ctx> {
 			TyErr::StackUnderflow => { write!(f, "Stack underflow") }
 			TyErr::ExpectedConstant => { write!(f, "Expected a constant value") }
 			TyErr::GepNoIndices => { write!(f, "Gep instruction has no indices") }
+			TyErr::TypeHasNoNull(ty_key) => { write!(f, "Type {} cannot have a null (zero) value", self.child(ty_key)) }
 			TyErr::PhiMissingInPredecessor(block_key) => { write!(f, "Phi node has no corresponding value in predecessor {}", self.child(block_key)) }
 			TyErr::PhiTypeMismatch(block_key, expected_ty, found_ty) => { write!(f, "Phi node has type {} but the value in predecessor {} has type {}", self.child(expected_ty), self.child(block_key), self.child(found_ty)) }
 			TyErr::PhiNoPredecessors(block_key) => { write!(f, "Phi node in block {} with no predecessors", self.child(block_key)) }
@@ -1323,7 +1327,7 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 
 					writeln!(f, ")")?;
 				} else {
-					self.child(&param.ty).fmt(f)?;
+					writeln!(f, "{}{}", self.indent(), self.child(&param.ty))?;
 				}
 
 				if i < self.0.param_order.len() - 1 {
@@ -1414,14 +1418,11 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 		self.decr_indent();
 		writeln!(f, "{})", self.indent())?;
 
-		match self.state().err_location {
+		if matches!(self.state().err_location,
 			IrErrLocation::Function(err_function_key, FunctionErrLocation::Root)
 			if err_function_key == self.data().as_key()
-			=> {
-				writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data.as_ref()))?;
-			}
-
-			_ => { }
+	 	) {
+			writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data.as_ref()))?;
 		}
 
 
@@ -1476,6 +1477,10 @@ impl<'data, 'ctx> fmt::Display for GlobalPrinter<'data, 'ctx> {
 		}
 
 		write!(f, "))")?;
+
+		if matches!(self.state().err_location, IrErrLocation::Global(key) if key == self.0.as_key()) {
+			writeln!(f, "\n{}", self.child(self.state().err_data.as_ref()))?;
+		}
 
 
 		Ok(())
@@ -1610,6 +1615,11 @@ impl<'data, 'ctx> Printer<'data, 'ctx> for ContextPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> fmt::Display for ContextPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		if matches!(self.state().err_location, IrErrLocation::None) {
+			if let Some(err_data) = &self.state().err_data {
+				writeln!(f, "Error: {}", self.child(err_data))?;
+			}
+		}
 		if !self.0.tys.is_empty() { writeln!(f, "{}(types {})", self.indent(), SlotmapPrinter(&self.0.tys, self.state()))?; }
 		if !self.0.globals.is_empty() { writeln!(f, "{}(globals {})", self.indent(), SlotmapPrinter(&self.0.globals, self.state()))?; }
 		if !self.0.functions.is_empty() { writeln!(f, "{}(functions {})", self.indent(), SlotmapPrinter(&self.0.functions, self.state()))?; }

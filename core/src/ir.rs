@@ -121,7 +121,7 @@ pub enum ConstantAggregateData {
 	Uninitialized,
 	Zeroed,
 	CopyFill(Box<Constant>),
-	Indexed(Vec<(u64, Constant)>),
+	Indexed(Vec<(u32, Constant)>),
 	Complete(Vec<Constant>),
 }
 
@@ -130,7 +130,7 @@ pub enum AggregateData {
 	Uninitialized,
 	Zeroed,
 	CopyFill,
-	Indexed(Vec<u64>),
+	Indexed(Vec<u32>),
 	Complete,
 }
 
@@ -153,21 +153,40 @@ pub enum Constant {
 	Aggregate(TyKey, ConstantAggregateData),
 }
 
+impl From<bool> for Constant { fn from (v: bool) -> Constant { Constant::Bool(v)    } }
+
+impl From<i8>   for Constant { fn from (v: i8) -> Constant   { Constant::SInt8(v)   } }
+impl From<i16>  for Constant { fn from (v: i16) -> Constant  { Constant::SInt16(v)  } }
+impl From<i32>  for Constant { fn from (v: i32) -> Constant  { Constant::SInt32(v)  } }
+impl From<i64>  for Constant { fn from (v: i64) -> Constant  { Constant::SInt64(v)  } }
+impl From<i128> for Constant { fn from (v: i128) -> Constant { Constant::SInt128(v) } }
+
+impl From<u8>   for Constant { fn from (v: u8) -> Constant   { Constant::UInt8(v)   } }
+impl From<u16>  for Constant { fn from (v: u16) -> Constant  { Constant::UInt16(v)  } }
+impl From<u32>  for Constant { fn from (v: u32) -> Constant  { Constant::UInt32(v)  } }
+impl From<u64>  for Constant { fn from (v: u64) -> Constant  { Constant::UInt64(v)  } }
+impl From<u128> for Constant { fn from (v: u128) -> Constant { Constant::UInt128(v) } }
+
+impl From<f32>  for Constant { fn from (v: f32) -> Constant  { Constant::Real32(v)  } }
+impl From<f64>  for Constant { fn from (v: f64) -> Constant  { Constant::Real64(v)  } }
+
+
+
 impl Constant {
-	pub fn as_index(&self) -> Option<u64> {
+	pub fn as_index(&self) -> Option<u32> {
 		use Constant::*;
 
 		Some(match *self {
-			SInt8(x) if x >= 0 => x as u64,
-			SInt16(x) if x >= 0 => x as u64,
-			SInt32(x) if x >= 0 => x as u64,
-			SInt64(x) if x >= 0 => x as u64,
-			SInt128(x) if x >= 0 && x <= u64::MAX as i128 => x as u64,
-			UInt8(x) => x as u64,
-			UInt16(x) => x as u64,
-			UInt32(x) => x as u64,
-			UInt64(x) => x,
-			UInt128(x) if x < u64::MAX as u128 => x as u64,
+			SInt8(x) if x >= 0 => x as u32,
+			SInt16(x) if x >= 0 => x as u32,
+			SInt32(x) if x >= 0 => x as u32,
+			SInt64(x) if x >= 0 && (x <= u32::MAX as i64) => x as u32,
+			SInt128(x) if x >= 0 && x <= u32::MAX as i128 => x as u32,
+			UInt8(x) => x as u32,
+			UInt16(x) => x as u32,
+			UInt32(x) => x as u32,
+			UInt64(x) if x <= u32::MAX as u64 => x as u32,
+			UInt128(x) if x < u32::MAX as u128 => x as u32,
 			_ => return None,
 		})
 	}

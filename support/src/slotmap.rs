@@ -57,6 +57,10 @@ impl<'a, D: Keyable> Keyed<'a, D> {
 	pub fn into_ref (self) -> &'a D {
 		self.value
 	}
+
+	pub fn into_key (self) -> D::Key {
+		self.key
+	}
 }
 
 impl<'a, D: Keyable> AsRef<D> for Keyed<'a, D> {
@@ -90,6 +94,10 @@ impl<'a, D: Keyable> KeyedMut<'a, D> {
 
 	pub fn into_mut (self) -> &'a mut D {
 		self.value
+	}
+
+	pub fn into_key (self) -> D::Key {
+		self.key
 	}
 }
 

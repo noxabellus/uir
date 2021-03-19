@@ -55,8 +55,8 @@ impl<'c> LLVMFunctionState<'c> {
 	}
 }
 
-pub struct LLVMBackend {
-	pub ctx: RefCell<Context>,
+pub struct LLVMBackend<'a> {
+	pub ctx: RefCell<&'a Context>,
 
 	pub abi: Box<dyn Abi>,
 	pub ll: LLVM,
@@ -64,12 +64,12 @@ pub struct LLVMBackend {
 	pub state: LLVMMutableState,
 }
 
-impl ops::Deref for LLVMBackend {
+impl<'a> ops::Deref for LLVMBackend<'a> {
 	type Target = LLVM;
 	fn deref (&self) -> &LLVM { &self.ll }
 }
 
-impl ops::DerefMut for LLVMBackend {
+impl<'a> ops::DerefMut for LLVMBackend<'a> {
 	fn deref_mut (&mut self) -> &mut LLVM { &mut self.ll }
 }
 
@@ -95,8 +95,8 @@ impl StackVal {
 	}
 }
 
-impl LLVMBackend {
-	pub fn new (ctx: Context) -> Option<Self> {
+impl<'a> LLVMBackend<'a> {
+	pub fn new (ctx: &'a Context) -> Option<Self> {
 		let abi = abi::get_abi(ctx.target.as_ref())?;
 
 		let ll = LLVM::new(llvm_str!("UIR_MODULE"));
@@ -114,12 +114,12 @@ impl LLVMBackend {
 	}
 
 	#[track_caller]
-	pub fn ctx (&self) -> Ref<Context> {
+	pub fn ctx (&self) -> Ref<&'a Context> {
 		self.ctx.borrow()
 	}
 
 	#[track_caller]
-	pub fn ctx_mut (&self) -> RefMut<Context> {
+	pub fn ctx_mut (&self) -> RefMut<&'a Context> {
 		self.ctx.borrow_mut()
 	}
 
@@ -271,41 +271,137 @@ impl LLVMBackend {
 		use Constant::*;
 
 		match constant {
-			Null(ty_key) => { let ty = self.emit_ty(*ty_key); (LLVMValue::const_null(ty), ty) },
+			Null(ty_key) => { let ty = self.emit_ty(*ty_key); (LLVMValue::null_ptr(ty), ty) },
 
-			Bool(val) => { let ty = self.prim_ty(PrimitiveTy::Bool); (LLVMValue::const_int(ty, *val as _), ty) },
+			Bool(val) => { let ty = self.prim_ty(PrimitiveTy::Bool); (LLVMValue::int(ty, *val as _), ty) },
 
-			SInt8(val) => { let ty = self.prim_ty(PrimitiveTy::SInt8); (LLVMValue::const_int(ty, *val as _), ty) },
-			SInt16(val) => { let ty = self.prim_ty(PrimitiveTy::SInt16); (LLVMValue::const_int(ty, *val as _), ty) },
-			SInt32(val) => { let ty = self.prim_ty(PrimitiveTy::SInt32); (LLVMValue::const_int(ty, *val as _), ty) },
-			SInt64(val) => { let ty = self.prim_ty(PrimitiveTy::SInt64); (LLVMValue::const_int(ty, *val as _), ty) },
+			SInt8(val) => { let ty = self.prim_ty(PrimitiveTy::SInt8); (LLVMValue::int(ty, *val as _), ty) },
+			SInt16(val) => { let ty = self.prim_ty(PrimitiveTy::SInt16); (LLVMValue::int(ty, *val as _), ty) },
+			SInt32(val) => { let ty = self.prim_ty(PrimitiveTy::SInt32); (LLVMValue::int(ty, *val as _), ty) },
+			SInt64(val) => { let ty = self.prim_ty(PrimitiveTy::SInt64); (LLVMValue::int(ty, *val as _), ty) },
 
 			SInt128(val) => {
 				let ty = self.prim_ty(PrimitiveTy::SInt128);
-				(LLVMValue::const_int(
+				(LLVMValue::int(
 					ty,
 					*val as _
 				), ty)
 			}
 
-			UInt8(val) => { let ty = self.prim_ty(PrimitiveTy::UInt8); (LLVMValue::const_int(ty, *val as _), ty) },
-			UInt16(val) => { let ty = self.prim_ty(PrimitiveTy::UInt16); (LLVMValue::const_int(ty, *val as _), ty) },
-			UInt32(val) => { let ty = self.prim_ty(PrimitiveTy::UInt32); (LLVMValue::const_int(ty, *val as _), ty) },
-			UInt64(val) => { let ty = self.prim_ty(PrimitiveTy::UInt64); (LLVMValue::const_int(ty, *val as _), ty) },
+			UInt8(val) => { let ty = self.prim_ty(PrimitiveTy::UInt8); (LLVMValue::int(ty, *val as _), ty) },
+			UInt16(val) => { let ty = self.prim_ty(PrimitiveTy::UInt16); (LLVMValue::int(ty, *val as _), ty) },
+			UInt32(val) => { let ty = self.prim_ty(PrimitiveTy::UInt32); (LLVMValue::int(ty, *val as _), ty) },
+			UInt64(val) => { let ty = self.prim_ty(PrimitiveTy::UInt64); (LLVMValue::int(ty, *val as _), ty) },
 
 			UInt128(val) =>  {
 				let ty = self.prim_ty(PrimitiveTy::UInt128);
-				(LLVMValue::const_int(
+				(LLVMValue::int(
 					ty,
 					*val
 				), ty)
 			}
 
-			Real32(val) => { let ty = self.prim_ty(PrimitiveTy::Real32); (LLVMValue::const_real(ty, *val as _), ty) },
-			Real64(val) => { let ty = self.prim_ty(PrimitiveTy::Real64); (LLVMValue::const_real(ty, *val), ty) },
+			Real32(val) => { let ty = self.prim_ty(PrimitiveTy::Real32); (LLVMValue::real(ty, *val as _), ty) },
+			Real64(val) => { let ty = self.prim_ty(PrimitiveTy::Real64); (LLVMValue::real(ty, *val), ty) },
 
-			Aggregate(_ty_key, _data) => {
-				todo!()
+			Aggregate(ty_key, aggregate_data) => {
+				let ty = self.ctx().and_then(|ctx| ctx.tys.get(*ty_key)).unwrap();
+				let llty = self.emit_ty(*ty_key);
+
+				let llval = match aggregate_data {
+					ConstantAggregateData::Uninitialized => LLVMValue::undef(llty),
+
+					ConstantAggregateData::Zeroed => LLVMValue::zero(llty),
+
+					ConstantAggregateData::CopyFill(elem) => {
+						let (llelem, llelem_ty) = self.emit_constant(elem);
+
+						let out = LLVMValue::zero(llty);
+
+						match &ty.data {
+							TyData::Array { length, element_ty: expected_ty } => {
+								assert_eq!(self.emit_ty(*expected_ty), llelem_ty);
+								out.const_fill_agg(llelem, *length)
+							}
+
+							TyData::Structure { field_tys } => {
+								field_tys.iter().for_each(|x| assert_eq!(self.emit_ty(*x), llelem_ty));
+								out.const_fill_agg(llelem, field_tys.len() as u32)
+							}
+
+							_ => unreachable!()
+						}
+					},
+
+					ConstantAggregateData::Indexed(indexed_elems) => {
+						let mut out = LLVMValue::zero(llty);
+
+						match &ty.data {
+							TyData::Array { length, element_ty: expected_ty } => {
+								let expected_ty = self.emit_ty(*expected_ty);
+
+								for &(i, ref elem) in indexed_elems.iter() {
+									let (llelem, llelem_ty) = self.emit_constant(elem);
+
+									assert!(i < *length);
+
+									assert_eq!(expected_ty, llelem_ty);
+
+									out = out.const_insert_value(llelem, i);
+								}
+							}
+
+							TyData::Structure { field_tys } => {
+								for &(i, ref elem) in indexed_elems.iter() {
+									let field_ty = field_tys[i as usize];
+									let field_llty = self.emit_ty(field_ty);
+
+									let (llelem, llelem_ty) = self.emit_constant(elem);
+									assert_eq!(field_llty, llelem_ty);
+
+									out = out.const_insert_value(llelem, i);
+								}
+							}
+
+							_ => unreachable!()
+						}
+
+						out
+					},
+
+					ConstantAggregateData::Complete(elems) => {
+						let mut out = LLVMValue::zero(llty);
+
+						match &ty.data {
+							TyData::Array { length, element_ty: expected_ty } => {
+								let expected_ty = self.emit_ty(*expected_ty);
+								for i in 0..*length {
+									let (llelem, llelem_ty) = self.emit_constant(&elems[i as usize]);
+									assert_eq!(expected_ty, llelem_ty);
+
+									out = out.const_insert_value(llelem, i);
+								}
+							}
+
+							TyData::Structure { field_tys } => {
+								for (i, &field_ty) in field_tys.iter().enumerate() {
+									let field_llty = self.emit_ty(field_ty);
+
+									let (llelem, llelem_ty) = self.emit_constant(&elems[i as usize]);
+									assert_eq!(field_llty, llelem_ty);
+
+									out = out.const_insert_value(llelem, i as u32);
+								}
+							}
+
+							_ => unreachable!()
+						}
+
+						out
+					},
+				};
+
+				(llval, llty)
 			}
 		}
 	}
@@ -433,7 +529,7 @@ impl LLVMBackend {
 				x if x.is_terminator() => unreachable!(),
 
 				IrData::Phi(phi_ty_key) => {
-					dbg!(phi_ty_key);
+					// dbg!(phi_ty_key);
 
 					let name = ir.name.as_deref().unwrap_or("phi");
 					let llty = self.emit_ty(*phi_ty_key);
@@ -448,7 +544,7 @@ impl LLVMBackend {
 
 
 				IrData::Constant(constant) => {
-					dbg!(constant);
+					// dbg!(constant);
 
 					let (llconst, llconst_ty) = self.emit_constant(constant);
 					let ty_key = self.ir_ty(fstate, ir_idx);
@@ -456,11 +552,108 @@ impl LLVMBackend {
 				}
 
 
-				IrData::BuildAggregate(_ty_key, _aggregate_data) => { todo!() }
+				IrData::BuildAggregate(ty_key, aggregate_data) => {
+					// dbg!(ty_key, aggregate_data);
+
+					let ty = self.ctx().and_then(|ctx| ctx.tys.get(*ty_key)).unwrap();
+					let llty = self.emit_ty(*ty_key);
+
+					let llval = match aggregate_data {
+						AggregateData::Uninitialized => LLVMValue::undef(llty),
+						AggregateData::Zeroed => LLVMValue::zero(llty),
+						AggregateData::CopyFill => {
+							let elem = fstate.stack.pop().unwrap();
+
+							let out = LLVMValue::zero(llty);
+
+							match &ty.data {
+								TyData::Array { length, element_ty } => {
+									assert_eq!(self.emit_ty(*element_ty), elem.lltype);
+									self.ll.fill_agg(out, elem.llvalue, *length)
+								}
+
+								TyData::Structure { field_tys } => {
+									field_tys.iter().for_each(|x| assert_eq!(self.emit_ty(*x), elem.lltype));
+									self.ll.fill_agg(out, elem.llvalue, field_tys.len() as u32)
+								}
+
+								_ => unreachable!()
+							}
+						},
+						AggregateData::Indexed(indices) => {
+							let mut out = LLVMValue::zero(llty);
+
+							match &ty.data {
+								TyData::Array { length, element_ty } => {
+									let elem_llty = self.emit_ty(*element_ty);
+
+									for &i in indices.iter() {
+										assert!(i < *length);
+
+										let elem = fstate.stack.pop().unwrap();
+										assert_eq!(elem_llty, elem.lltype);
+
+										out = self.ll.insert_value(out, elem.llvalue, i, None::<LLVMString>);
+									}
+								}
+
+								TyData::Structure { field_tys } => {
+									for &i in indices.iter() {
+										let field_ty = *field_tys.get(i as usize).unwrap();
+										let field_llty = self.emit_ty(field_ty);
+
+										let elem = fstate.stack.pop().unwrap();
+										assert_eq!(field_llty, elem.lltype);
+
+										out = self.ll.insert_value(out, elem.llvalue, i, None::<LLVMString>);
+									}
+								}
+
+								_ => unreachable!()
+							}
+
+							out
+						},
+
+						AggregateData::Complete => {
+							let mut out = LLVMValue::zero(llty);
+
+							match &ty.data {
+								TyData::Array { length, element_ty } => {
+									let elem_llty = self.emit_ty(*element_ty);
+									for i in 0..*length {
+										let elem = fstate.stack.pop().unwrap();
+										assert_eq!(elem.lltype, elem_llty);
+
+										out = self.ll.insert_value(out, elem.llvalue, i, None::<LLVMString>);
+									}
+								}
+
+								TyData::Structure { field_tys } => {
+									for (i, &field_ty) in field_tys.iter().enumerate() {
+										let field_llty = self.emit_ty(field_ty);
+
+										let elem = fstate.stack.pop().unwrap();
+										assert_eq!(elem.lltype, field_llty);
+
+										out = self.ll.insert_value(out, elem.llvalue, i as u32, None::<LLVMString>);
+									}
+								}
+
+								_ => unreachable!()
+							}
+
+							out
+						},
+					};
+
+					let ty_key = self.ir_ty(fstate, ir_idx);
+					fstate.stack.push(StackVal::source(llval, llty, ir_idx, ty_key))
+				}
 
 
 				IrData::GlobalRef(gkey) => {
-					dbg!(gkey);
+					// dbg!(gkey);
 
 					let global = self.ctx().and_then(|ctx| ctx.globals.get(*gkey)).unwrap();
 					let llg = self.emit_global(*gkey);
@@ -470,7 +663,7 @@ impl LLVMBackend {
 				}
 
 				IrData::FunctionRef(fkey) => {
-					dbg!(fkey);
+					// dbg!(fkey);
 
 					let function = self.ctx().and_then(|ctx| ctx.functions.get(*fkey)).unwrap();
 					let llf = self.emit_function_decl(*fkey);
@@ -480,7 +673,7 @@ impl LLVMBackend {
 				}
 
 				IrData::BlockRef(bkey) => {
-					dbg!(bkey);
+					// dbg!(bkey);
 
 					let llbb = *fstate.blocks.get(bkey).unwrap();
 					let ty_key = self.ir_ty(fstate, ir_idx);
@@ -488,7 +681,7 @@ impl LLVMBackend {
 				}
 
 				IrData::ParamRef(pkey) => {
-					dbg!(pkey);
+					// dbg!(pkey);
 
 					let llparam = *fstate.params.get(pkey).unwrap();
 					let llty = self.emit_ty(fstate.func.param_data.get(*pkey).unwrap().ty).as_pointer(0);
@@ -497,7 +690,7 @@ impl LLVMBackend {
 				}
 
 				IrData::LocalRef(lkey) => {
-					dbg!(lkey);
+					// dbg!(lkey);
 
 					let llvar = *fstate.locals.get(lkey).unwrap();
 					let llty = self.emit_ty(fstate.func.locals.get(*lkey).unwrap().ty).as_pointer(0);
@@ -507,7 +700,7 @@ impl LLVMBackend {
 
 
 				IrData::BinaryOp(bin_op) => {
-					dbg!(bin_op);
+					// dbg!(bin_op);
 
 					let a = fstate.stack.pop().unwrap();
 					let b = fstate.stack.pop().unwrap();
@@ -522,7 +715,7 @@ impl LLVMBackend {
 				}
 
 				IrData::UnaryOp(un_op) => {
-					dbg!(un_op);
+					// dbg!(un_op);
 
 					let e = fstate.stack.pop().unwrap();
 
@@ -534,7 +727,7 @@ impl LLVMBackend {
 				}
 
 				IrData::CastOp(cast_op, target_ty_key) => {
-					dbg!(cast_op, target_ty_key);
+					// dbg!(cast_op, target_ty_key);
 
 					let e = fstate.stack.pop().unwrap();
 
@@ -548,20 +741,32 @@ impl LLVMBackend {
 				}
 
 				IrData::Gep(gep_num_indices) => {
-					dbg!(gep_num_indices);
+					// dbg!(gep_num_indices);
 
-					let ptr = fstate.stack.pop().unwrap();
-					assert!(ptr.lltype.is_pointer_kind());
 
-					let indices = (0..*gep_num_indices).into_iter().map(|_| fstate.stack.pop().unwrap().llvalue).collect::<Vec<_>>();
+					let mut gep_stack = fstate.stack.pop_n_to(*gep_num_indices as usize + 1).unwrap().reversed();
+
+					let StackVal { llvalue: lltarget, lltype, .. } = gep_stack.pop().unwrap();
+					assert!(lltype.is_pointer_kind());
+					let llbase_ty = lltype.get_element_type();
+
+					let indices =
+						gep_stack
+							.into_iter()
+							.map(|x| {
+								assert!(x.lltype.is_integer_kind());
+								x.llvalue
+							})
+							.collect::<Vec<_>>();
+
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					let llty = self.emit_ty(ty_key);
-					let gep = self.ll.gep(llty, ptr.llvalue, &indices, None::<LLVMString>); // TODO: name geps
+					let gep = self.ll.gep(llbase_ty, lltarget, &indices, None::<LLVMString>); // TODO: name geps
 					fstate.stack.push(StackVal::source(gep, llty, ir_idx, ty_key))
 				}
 
 				IrData::Load => {
-					dbg!("load");
+					// dbg!("load");
 
 					let StackVal { lltype, llvalue, .. } = fstate.stack.pop().unwrap();
 					assert!(!lltype.get_element_type().is_function_kind()); // TODO: more robust unloadable type check?
@@ -572,7 +777,7 @@ impl LLVMBackend {
 				}
 
 				IrData::Store => {
-					dbg!("stor");
+					// dbg!("stor");
 
 					let StackVal { lltype: llptr_ty, llvalue: llptr, .. } = fstate.stack.pop().unwrap();
 					let StackVal { lltype: llval_ty, llvalue: llval, .. } = fstate.stack.pop().unwrap();
@@ -584,7 +789,7 @@ impl LLVMBackend {
 
 
 				IrData::Call => {
-					dbg!("call");
+					// dbg!("call");
 
 					if let Some((llval, llty)) = self.emit_call(fstate) {
 						let ty_key = self.ir_ty(fstate, ir_idx);
@@ -593,20 +798,20 @@ impl LLVMBackend {
 				}
 
 				IrData::Duplicate => {
-					dbg!("duplicate");
+					// dbg!("duplicate");
 
 					let val = *fstate.stack.peek().unwrap();
 					fstate.stack.push(val);
 				}
 
 				IrData::Discard => {
-					dbg!("discard");
+					// dbg!("discard");
 
 					fstate.stack.pop();
 				}
 
 				IrData::Swap => {
-					dbg!("swap");
+					// dbg!("swap");
 
 					let a = fstate.stack.pop().unwrap();
 					let b = fstate.stack.pop().unwrap();
@@ -656,29 +861,35 @@ impl LLVMBackend {
 		};
 
 		match &term.data {
-			IrData::Branch(dest) => {
-				let lldest = *fstate.blocks.get(dest).unwrap();
+			IrData::Branch(branch_dest) => {
+				// dbg!(branch_dest);
+
+				let lldest = *fstate.blocks.get(branch_dest).unwrap();
 				self.ll.branch(lldest);
 
-				fixup_phis(dest, &out_vals);
+				fixup_phis(branch_dest, &out_vals);
 			}
 
-			IrData::CondBranch(a, b) => {
+			IrData::CondBranch(then_branch, else_branch) => {
+				// dbg!(then_branch, else_branch);
+
 				let StackVal { llvalue, .. } = out_vals.pop().unwrap();
 
-				let lla = *fstate.blocks.get(a).unwrap();
-				let llb = *fstate.blocks.get(b).unwrap();
+				let lla = *fstate.blocks.get(then_branch).unwrap();
+				let llb = *fstate.blocks.get(else_branch).unwrap();
 				self.ll.cond_branch(llvalue, lla, llb);
 
-				fixup_phis(a, &out_vals);
-				fixup_phis(b, &out_vals);
+				fixup_phis(then_branch, &out_vals);
+				fixup_phis(else_branch, &out_vals);
 			}
 
-			IrData::Switch(branches, default_block) => {
+			IrData::Switch(switch_branches, default_block) => {
+				// dbg!(switch_branches, default_block);
+
 				let lldefault = *fstate.blocks.get(default_block).unwrap();
 				let StackVal { llvalue, lltype, .. } = out_vals.pop().unwrap();
-				let switch = self.ll.switch(llvalue, lldefault, branches.len() as u32);
-				branches.iter().for_each(|(constant, block)| {
+				let switch = self.ll.switch(llvalue, lldefault, switch_branches.len() as u32);
+				switch_branches.iter().for_each(|(constant, block)| {
 					let (llconst, llconst_ty) = self.emit_constant(constant);
 					assert_eq!(llconst_ty, lltype);
 
@@ -691,22 +902,28 @@ impl LLVMBackend {
 				fixup_phis(default_block, &out_vals);
 			}
 
-			IrData::ComputedBranch(dests) => {
+			IrData::ComputedBranch(computed_dests) => {
+				// dbg!(computed_dests);
+
 				let StackVal { llvalue, lltype, .. } = out_vals.pop().unwrap();
 
 				assert!(lltype == LLVMType::label(self.ll.ctx));
 
-				self.ll.indirect_branch(llvalue, dests.len() as u32);
+				self.ll.indirect_branch(llvalue, computed_dests.len() as u32);
 
-				dests.iter().for_each(|dest| fixup_phis(dest, &out_vals));
+				computed_dests.iter().for_each(|dest| fixup_phis(dest, &out_vals));
 			}
 
 			IrData::Ret => {
+				// dbg!("ret");
+
 				self.emit_return(fstate, out_vals);
 			}
 
 			IrData::Unreachable
 			=> {
+				// dbg!("unreachable");
+
 				assert!(out_vals.is_empty());
 				self.ll.unreachable();
 			}
@@ -738,7 +955,7 @@ impl LLVMBackend {
 		let lltype = self.emit_ty(fstate.func.ty);
 		let abi = self.abi_info(lltype);
 
-		let entry = self.ll.append_basic_block(fstate.llfunc, Some(llvm_str!("entry")));
+		let entry = self.ll.append_basic_block(fstate.llfunc, Some(llvm_str!("abi")));
 		self.ll.position_at_end(entry);
 
 		let mut llparams = fstate.llfunc.get_params().into_iter();
@@ -752,29 +969,34 @@ impl LLVMBackend {
 	 	for (abi_arg, &param_key) in abi.args.iter().zip(fstate.func.param_order.iter()) {
 			let param = match abi_arg.kind {
 				ArgKind::Direct => {
+					let alloca = self.ll.alloca(abi_arg.base_type, None::<LLVMString>); // TODO: name params
+					let mut abi_ptr = alloca;
+
 					let llvalue = if let Some(ArgAttr::ZExt) = abi_arg.attribute {
 						// TODO: this is currently only handling i8 -> i1
 						let int1 = LLVMType::int1(self.ll.ctx);
 						debug_assert!(abi_arg.base_type == int1);
 
-						self.ll.trunc_or_bitcast(llparams.next().unwrap(), int1, None::<LLVMString>) // TODO: name truncs
+						self.ll.itrunc(llparams.next().unwrap(), int1, None::<LLVMString>) // TODO: name truncs
 					} else if abi_arg.cast_types.is_empty() {
 						llparams.next().unwrap()
 					} else {
-						let mut agg = None;
+						let cast_ty = LLVMType::anonymous_structure(self.ll.ctx, &abi_arg.cast_types, false);
+						let mut agg = LLVMValue::zero(cast_ty);
 						for i in 0..abi_arg.cast_types.len() as u32 {
 							let llparam = llparams.next().unwrap();
 
-							agg = Some(self.ll.insert_value(agg, llparam, i, None::<LLVMString>)); // TODO: name inserts
+							agg = self.ll.insert_value(agg, llparam, i, None::<LLVMString>); // TODO: name inserts
 						}
 
-						self.ll.trunc_or_bitcast(agg.unwrap(), abi_arg.base_type, None::<LLVMString>) // TODO: name casts
+						abi_ptr = self.ll.bitcast(abi_ptr, cast_ty.as_pointer(0), None::<LLVMString>); // TODO: name casts
+
+						agg
 					};
 
-					let param = self.ll.alloca(abi_arg.base_type, None::<LLVMString>); // TODO: name params
-					self.ll.store(llvalue, param);
+					self.ll.store(llvalue, abi_ptr);
 
-					param
+					alloca
 				},
 
 				ArgKind::Indirect => {
@@ -809,12 +1031,23 @@ impl LLVMBackend {
 
 					let llvalue = if abi.result.attribute == Some(ArgAttr::ZExt) {
 						// TODO: this is currently only handling i1 -> i8
-						self.ll.zext_or_bitcast(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zext
+						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zext
 					} else if abi.result.cast_types.is_empty() {
 						base_llvalue
 					} else {
-						let arg_struct = LLVMType::anonymous_structure(self.ll.ctx, &abi.result.cast_types, false);
-						self.ll.zext_or_bitcast(base_llvalue, arg_struct, None::<LLVMString>) // TODO: name cast
+						let arg_ty =
+							if abi.result.cast_types.len() == 1 {
+								*abi.result.cast_types.first().unwrap()
+							} else {
+								LLVMType::anonymous_structure(self.ll.ctx, &abi.result.cast_types, false)
+							};
+
+						let alloca = self.ll.alloca(arg_ty, None::<LLVMString>); // TODO: name temporary abi alloca?
+						let cast = self.ll.bitcast(alloca, abi.result.base_type.as_pointer(0), None::<LLVMString>); // TODO: name cast
+
+						self.ll.store(base_llvalue, cast);
+
+						self.ll.load(alloca, None::<LLVMString>) // TODO: name abi return?
 					};
 
 					self.ll.ret(llvalue)
@@ -822,7 +1055,7 @@ impl LLVMBackend {
 			}
 
 			ArgKind::Indirect => {
-				let StackVal { llvalue: base_llvalue, .. } = fstate.stack.pop().unwrap();
+				let StackVal { llvalue: base_llvalue, .. } = stack.pop().unwrap();
 				self.store(base_llvalue, fstate.sret.unwrap());
 
 				self.ll.ret_void()
@@ -863,13 +1096,13 @@ impl LLVMBackend {
 						// TODO: this is currently only handling i1 -> i8
 						debug_assert!(abi_arg.base_type == LLVMType::int1(self.ll.ctx));
 
-						self.ll.zext_or_bitcast(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zexts
+						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zexts
 					} else if abi_arg.cast_types.is_empty() {
 						base_llvalue
 					} else {
 						let arg_struct = LLVMType::anonymous_structure(self.ll.ctx, &abi_arg.cast_types, false);
 
-						self.ll.zext_or_bitcast(base_llvalue, arg_struct, None::<LLVMString>) // TODO: name destructure casts
+						self.ll.bitcast(base_llvalue, arg_struct, None::<LLVMString>) // TODO: name destructure casts
 					}
 				}
 
@@ -921,7 +1154,7 @@ impl LLVMBackend {
 				(if abi.result.cast_types.is_empty() {
 					result
 				} else {
-					self.ll.trunc_or_bitcast(result, abi.result.base_type, None::<LLVMString>) // TODO: name trunc rets
+					self.ll.bitcast(result, abi.result.base_type, None::<LLVMString>) // TODO: name trunc rets
 				}, abi.result.base_type)
 			}
 		};
@@ -973,7 +1206,7 @@ impl LLVMBackend {
 			Ne if ty.is_real()
 			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
 
-			Eq if ty.is_pointer() => {
+			Eq if ty.is_pointer() => { // TODO: int to ptr instr
 				let intptr = LLVMType::int(self.ll.ctx, self.abi.word_bits());
 				let lla = self.ll.bitcast(a.llvalue, intptr, None::<LLVMString>);
 				let llb = self.ll.bitcast(b.llvalue, intptr, None::<LLVMString>);
@@ -1081,8 +1314,16 @@ impl LLVMBackend {
 			RealTruncate if ty.is_real() && target_ty.is_real()
 			=> self.ll.ftrunc(e.llvalue, lltgt_ty, None::<LLVMString>),
 
-			Bitcast
+			Bitcast if ty.is_primitive() || ty.is_pointer()
 			=> self.ll.bitcast(e.llvalue, lltgt_ty, None::<LLVMString>),
+
+			Bitcast if ty.is_aggregate()
+			=> {
+				let alloca = self.ll.alloca(e.lltype.as_pointer(0), None::<LLVMString>);
+				self.ll.store(e.llvalue, alloca);
+				let cast = self.ll.bitcast(alloca, lltgt_ty.as_pointer(0), None::<LLVMString>);
+				self.ll.load(cast, None::<LLVMString>)
+			}
 
 			_ => unreachable!()
 		}
@@ -1165,7 +1406,7 @@ typedef unsigned long uint64_ty;
 				// };
 
 				let struct_function_ty = builder.function_ty(vec! [ struct_ty ], Some(struct_ty)).unwrap().as_key();
-				let backend = LLVMBackend::new(ctx).unwrap();
+				let backend = LLVMBackend::new(&ctx).unwrap();
 
 				let ll_struct_function_user_ty = backend.emit_ty(struct_function_ty);
 				let struct_function_abi = backend.abi_info(ll_struct_function_user_ty);
@@ -1393,3 +1634,5 @@ typedef unsigned long uint64_ty;
 
 // 	}
 // }
+
+

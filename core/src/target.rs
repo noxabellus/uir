@@ -7,7 +7,7 @@ use super::{
 
 pub trait Target: fmt::Debug + Any {
 	fn primitive_layout (&self, ty: PrimitiveTy) -> Layout;
-	fn word_size (&self) -> u64;
+	fn word_size (&self) -> u32;
 
 	fn pointer_layout (&self) -> Layout { Layout::scalar(self.word_size()) }
 }
@@ -33,7 +33,7 @@ impl Target for AMD64 {
 		}
 	}
 
-	fn word_size(&self) -> u64 { 8 }
+	fn word_size(&self) -> u32 { 8 }
 }
 
 

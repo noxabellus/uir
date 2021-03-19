@@ -241,6 +241,10 @@ impl<'a> BlockManipulator<'a> {
 	pub fn into_mut (self) -> &'a mut Block {
 		self.0.into_mut()
 	}
+
+	pub fn into_key (self) -> BlockKey {
+		self.0.into_key()
+	}
 }
 
 pub struct ParamManipulator<'a> (KeyedMut<'a, Param>);
@@ -302,6 +306,10 @@ impl<'a> ParamManipulator<'a> {
 
 	pub fn into_mut (self) -> &'a mut Param {
 		self.0.into_mut()
+	}
+
+	pub fn into_key (self) -> ParamKey {
+		self.0.into_key()
 	}
 }
 
@@ -367,6 +375,10 @@ impl<'a> LocalManipulator<'a> {
 	pub fn into_mut (self) -> &'a mut Local {
 		self.0.into_mut()
 	}
+
+	pub fn into_key (self) -> LocalKey {
+		self.0.into_key()
+	}
 }
 
 
@@ -425,6 +437,10 @@ impl<'a> GlobalManipulator<'a> {
 
 	pub fn into_mut (self) -> &'a mut Global {
 		self.0.into_mut()
+	}
+
+	pub fn into_key (self) -> GlobalKey {
+		self.0.into_key()
 	}
 }
 
@@ -485,6 +501,10 @@ impl<'a> FunctionManipulator<'a> {
 	pub fn into_mut (self) -> &'a mut Function {
 		self.0.into_mut()
 	}
+
+	pub fn into_key (self) -> FunctionKey {
+		self.0.into_key()
+	}
 }
 
 
@@ -544,6 +564,10 @@ impl<'a> TyManipulator<'a> {
 	pub fn into_mut (self) -> &'a mut Ty {
 		self.0.into_mut()
 	}
+
+	pub fn into_key (self) -> TyKey {
+		self.0.into_key()
+	}
 }
 
 
@@ -595,9 +619,64 @@ impl<'a> IrManipulator<'a> {
 
 
 
+pub enum Either<A, B> {
+	A(A),
+	B(B),
+}
+
+pub struct PartialResult<T, E> {
+	pub value: T,
+	pub error: Option<E>,
+}
 
 
+impl<T, E> PartialResult<T, E> {
+	pub fn new (value: T, error: Option<E>) -> Self {
+		Self { value, error }
+	}
 
+	pub fn into_error (self) -> Result<T, E> {
+		match self.error {
+			None => Ok(self.value),
+			Some(e) => Err(e),
+		}
+	}
+
+	pub fn unwrap (self) -> T
+	where E: std::fmt::Debug
+	{
+		if let Some(err) = self.error {
+			panic!("Cannot unwrap PartialResult: {:#?}", err)
+		}
+
+		self.value
+	}
+
+	pub fn expect (self, description: &str) -> T
+	where E: std::fmt::Debug
+	{
+		if let Some(err) = self.error {
+			panic!("Expected {} for PartialResult but found err: {:#?}", description, err)
+		}
+
+		self.value
+	}
+
+	pub fn map<U> (self, f: impl FnOnce (T) -> U) -> PartialResult<U, E> {
+		PartialResult::new(f(self.value), self.error)
+	}
+}
+
+impl<T> PartialResult<T, IrErr> {
+	pub fn unwrap_rich (self, ctx: &Context) -> T {
+		use crate::printer::PrinterState;
+		if let Some(err) = self.error {
+			panic!("Cannot unwrap PartialResult: {}", PrinterState::new(ctx).with_error(Some(err)).print_self())
+		}
+
+		self.value
+	}
+}
 
 
 
@@ -614,7 +693,7 @@ pub struct TyDict {
 
 #[derive(Debug)]
 pub struct Builder<'c> {
-	ctx: &'c mut Context,
+	pub ctx: &'c mut Context,
 	tys: TyDict,
 }
 
@@ -664,6 +743,26 @@ impl<'c> Builder<'c> {
 		Self { ctx, tys }
 	}
 
+	pub fn const_zero (&self, ty_key: impl AsKey<TyKey>) -> IrDataResult<Constant> {
+		let ty_key = ty_key.as_key();
+		let ty = self.get_ty(ty_key)?;
+
+		Ok(match &ty.data {
+			TyData::Void
+			=> return Err(TyErr::TypeHasNoNull(ty_key).into()),
+
+			| TyData::Block
+			| TyData::Pointer { .. }
+			| TyData::Function { .. }
+			=> Constant::Null(ty_key),
+
+			TyData::Primitive(prim)
+			=> prim.const_zero(),
+
+			TyData::Array { .. }  | TyData::Structure { .. }
+			=> Constant::Aggregate(ty_key, ConstantAggregateData::Zeroed),
+		})
+	}
 
 	pub fn void_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.void).unwrap() }
 	pub fn block_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.block).unwrap() }
@@ -692,7 +791,7 @@ impl<'c> Builder<'c> {
 		Ok(TyManipulator(self.ctx.add_ty(TyData::Pointer { target_ty }.into())))
 	}
 
-	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrDataResult<TyManipulator> {
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u32, element_ty: K) -> IrDataResult<TyManipulator> {
 		let element_ty = self.get_ty(element_ty)?.as_key();
 
 		Ok(TyManipulator(self.ctx.add_ty(TyData::Array { length, element_ty }.into())))
@@ -848,15 +947,15 @@ impl<'c> Builder<'c> {
 		Ok(Ref::map(base, |opt| opt.as_ref().unwrap()))
 	}
 
-	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> {
+	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u32> {
 		Ok(self.finalize_ty(ty_key)?.size)
 	}
 
-	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> {
+	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u32> {
 		Ok(self.finalize_ty(ty_key)?.align)
 	}
 
-	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<[u64]>> {
+	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<[u32]>> {
 		let ty_key = ty_key.as_key();
 
 		if self.get_ty(ty_key)?.is_structure() {
@@ -875,7 +974,7 @@ impl<'c> Builder<'c> {
 	}
 
 
-	pub fn create_global (&mut self, ty: TyKey, init: Option<Constant>) -> (GlobalManipulator, IrResult) {
+	pub fn create_global (&mut self, ty: TyKey, init: Option<Constant>) -> PartialResult<GlobalManipulator, IrErr> {
 		let g = self.ctx.globals.insert(Global {
 			ty,
 			init,
@@ -884,7 +983,7 @@ impl<'c> Builder<'c> {
 
 		let result = ty_checker::check_global(self, g);
 
-		(self.get_global_mut(g).unwrap(), result)
+		PartialResult::new(self.get_global_mut(g).unwrap(), result.err())
 	}
 
 
@@ -999,15 +1098,15 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn finalize (mut self) -> (FunctionManipulator<'b>, IrResult) {
+	pub fn finalize (mut self) -> PartialResult<FunctionManipulator<'b>, IrErr> {
 		self.clear_active_block();
 
 		let function_key = self.function_key;
 
 		if let Err(e) = self.generate_own_ty() {
-			return (
+			return PartialResult::new(
 				FunctionManipulator(self.builder.ctx.functions.define(function_key, self.function).unwrap()),
-				Err(e.at(FunctionErrLocation::Root.at(function_key)))
+				Some(e.at(FunctionErrLocation::Root.at(function_key)))
 			)
 		}
 
@@ -1030,13 +1129,13 @@ impl<'b> FunctionBuilder<'b> {
 						function.cfg = cfg;
 						function.ty_map = ty_map;
 
-						(function, Ok(()))
+						PartialResult::new(function, None)
 					}
 
-					Err(e) => (builder.get_function_mut(function_key).unwrap(), Err(e))
+					Err(e) => PartialResult::new(builder.get_function_mut(function_key).unwrap(), Some(e))
 				}
 			},
-			Err(e) => (builder.get_function_mut(function_key).unwrap(), Err(e))
+			Err(e) => PartialResult::new(builder.get_function_mut(function_key).unwrap(), Some(e))
 		}
 	}
 
@@ -1121,7 +1220,7 @@ impl<'b> FunctionBuilder<'b> {
 	pub fn real64_ty (&self) -> Keyed<Ty> { self.builder.real64_ty() }
 
 	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrDataResult<TyManipulator> { self.builder.pointer_ty(target_ty) }
-	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u64, element_ty: K) -> IrDataResult<TyManipulator> { self.builder.array_ty(length, element_ty) }
+	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u32, element_ty: K) -> IrDataResult<TyManipulator> { self.builder.array_ty(length, element_ty) }
 	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrDataResult<TyManipulator> { self.builder.structure_ty(field_tys) }
 	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrDataResult<TyManipulator> { self.builder.function_ty(parameter_tys, result_ty) }
 
@@ -1153,9 +1252,9 @@ impl<'b> FunctionBuilder<'b> {
 
 	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<Layout>> { self.builder.finalize_ty(ty_key) }
 
-	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> { self.builder.size_of(ty_key) }
-	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u64> { self.builder.align_of(ty_key) }
-	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<[u64]>> { self.builder.field_offsets_of(ty_key) }
+	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u32> { self.builder.size_of(ty_key) }
+	pub fn align_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u32> { self.builder.align_of(ty_key) }
+	pub fn field_offsets_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<[u32]>> { self.builder.field_offsets_of(ty_key) }
 
 
 

@@ -22,7 +22,7 @@ mod test {
 		ir::*,
 		builder::*,
 		target,
-		with_block,
+		block,
 		printer::PrinterState,
 	};
 	use BinaryOp::*;
@@ -42,7 +42,7 @@ mod test {
 
 		f.set_return_ty(s32t);
 
-		with_block!(f, "entry" => {
+		block!(f, "entry" {
 			f.param_ref(a);
 			f.load();
 
@@ -55,12 +55,12 @@ mod test {
 			f.ret();
 		});
 
-		let (_function, result) = f.finalize();
+		let PartialResult { value: _function, error } = f.finalize();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("add.ir");
-		let output = format!("{}", PrinterState::new(&context).with_result(result).print_self());
+		let output = format!("{}", PrinterState::new(&context).with_error(error).print_self());
 		write(&path, &output).unwrap();
 		println!("{}", &output);
 
@@ -89,7 +89,7 @@ mod test {
 		let recurse = f.append_new_block().set_name("recurse").as_key();
 		let end = f.append_new_block().set_name("end").as_key();
 
-		with_block!(f, entry => {
+		block!(f, entry => {
 			f.param_ref(n);
 			f.load();
 			f.const_sint32(2);
@@ -99,13 +99,13 @@ mod test {
 			f.cond_branch(use_n, recurse);
 		});
 
-		with_block!(f, use_n => {
+		block!(f, use_n => {
 			f.param_ref(n);
 			f.load();
 			f.branch(end);
 		});
 
-		with_block!(f, recurse => {
+		block!(f, recurse => {
 			f.param_ref(n);
 			f.load();
 			f.const_sint32(1);
@@ -128,20 +128,20 @@ mod test {
 			f.branch(end);
 		});
 
-		with_block!(f, end => {
+		block!(f, end => {
 			f.phi(s32t)
 			 .set_name("result");
 
 			f.ret();
 		});
 
-		let (function, result) = f.finalize();
+		let PartialResult { value: function, error } = f.finalize();
 		let function = function.as_key();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("fib.ir");
-		let output = format!("{}", PrinterState::new(&context).with_result(result).print_function(function));
+		let output = format!("{}", PrinterState::new(&context).with_error(error).print_function(function));
 		write(&path, &output).unwrap();
 		println!("{}", &output);
 

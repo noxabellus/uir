@@ -1,5 +1,6 @@
 use std::fmt;
 
+use llvm_sys::analysis::{LLVMVerifierFailureAction, LLVMVerifyFunction};
 pub use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, LLVMValueKind, LLVMValueKind::*, core::*, prelude::*};
 pub use llvm_sys::{LLVMIntPredicate, LLVMIntPredicate::*,};
 pub use llvm_sys::{LLVMRealPredicate, LLVMRealPredicate::*,};
@@ -227,7 +228,7 @@ impl LLVMBlock {
 }
 
 impl LLVMType {
-	pub fn of (value: impl Into<LLVMValueRef>) -> LLVMType {
+	pub fn of (value: LLVMValue) -> LLVMType {
 		unsafe { LLVMTypeOf(value.into()).into() }
 	}
 
@@ -427,23 +428,53 @@ impl LLVMType {
 
 
 impl LLVMValue {
-	pub fn const_null (ty: impl Into<LLVMTypeRef>) -> LLVMValue {
+	pub fn verify_function (self, action: LLVMVerifierFailureAction) -> bool {
+		unsafe { LLVMVerifyFunction(self.into(), action) == LLVMOk }
+	}
+
+	pub fn undef (ty: LLVMType) -> LLVMValue {
+		unsafe { LLVMGetUndef(ty.into()).into() }
+	}
+
+	pub fn zero (ty: LLVMType) -> LLVMValue {
+		unsafe { LLVMConstNull(ty.into()).into() }
+	}
+
+	pub fn null_ptr (ty: LLVMType) -> LLVMValue {
 		unsafe { LLVMConstPointerNull(ty.into()).into() }
 	}
 
-	pub fn const_int (ty: impl Into<LLVMTypeRef>, value: u128) -> LLVMValue {
+	pub fn int (ty: LLVMType, value: u128) -> LLVMValue {
 		unsafe { LLVMConstIntOfArbitraryPrecision(ty.into(), 2, &value as *const _ as *const _).into() }
 	}
 
-	pub fn const_real (ty: impl Into<LLVMTypeRef>, value: f64) -> LLVMValue {
+	pub fn real (ty: LLVMType, value: f64) -> LLVMValue {
 		unsafe { LLVMConstReal(ty.into(), value).into() }
 	}
 
-	pub fn create_global (module: impl Into<LLVMModuleRef>, ty: impl Into<LLVMTypeRef>, name: impl Into<LLVMString>) -> LLVMValue {
+
+	pub fn const_insert_value (self, value: LLVMValue, index: u32) -> LLVMValue {
+		unsafe { LLVMConstInsertValue(self.into(), value.into(), [index].as_ptr() as _, 1).into() }
+	}
+
+	pub fn const_fill_agg (mut self, value: LLVMValue, len: u32) -> LLVMValue {
+		for i in 0..len {
+			self = self.const_insert_value(value, i);
+		}
+
+		self
+	}
+
+
+	// pub fn const_structure (ty: LLVMType) -> LLVMValue {
+	// 	unsafe { LLVMConstNamedStruct(ty.into(), ).into() }
+	// }
+
+	pub fn create_global (module: impl Into<LLVMModuleRef>, ty: LLVMType, name: impl Into<LLVMString>) -> LLVMValue {
 		unsafe { LLVMAddGlobal(module.into(), ty.into(), name.into().as_ptr()).into() }
 	}
 
-	pub fn create_function (module: impl Into<LLVMModuleRef>, ty: impl Into<LLVMTypeRef>, name: impl Into<LLVMString>) -> LLVMValue {
+	pub fn create_function (module: impl Into<LLVMModuleRef>, ty: LLVMType, name: impl Into<LLVMString>) -> LLVMValue {
 		unsafe { LLVMAddFunction(module.into(), name.into().as_ptr(), ty.into()).into() }
 	}
 
@@ -451,7 +482,7 @@ impl LLVMValue {
 		unsafe { LLVMGetNamedFunction(module.into(), name.into().as_ptr()).into() }
 	}
 
-	pub fn set_global_initializer (self, const_init: impl Into<LLVMValueRef>) {
+	pub fn set_global_initializer (self, const_init: LLVMValue) {
 		unsafe { LLVMSetInitializer(self.into(), const_init.into()) }
 	}
 
@@ -530,6 +561,20 @@ pub struct LLVM {
 	pub builder: LLVMBuilderRef,
 }
 
+
+impl fmt::Display for LLVM {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let alloc = unsafe { LLVMPrintModuleToString(self.module) };
+		let s = unsafe { std::ffi::CStr::from_ptr(alloc).to_str().unwrap_or("[Err printing llvm module to string]") };
+
+		write!(f, "{}", s)?;
+
+		unsafe { LLVMDisposeMessage(alloc) }
+
+		Ok(())
+	}
+}
+
 impl LLVM {
 	pub fn new (module_name: impl Into<LLVMString>) -> Self {
 		unsafe {
@@ -548,7 +593,7 @@ impl LLVM {
 
 
 
-	pub fn append_basic_block (&self, function: impl Into<LLVMValueRef>, name: Option<impl Into<LLVMString>>) -> LLVMBlock {
+	pub fn append_basic_block (&self, function: LLVMValue, name: Option<impl Into<LLVMString>>) -> LLVMBlock {
 		unsafe { LLVMAppendBasicBlockInContext(self.ctx, function.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
 	}
 
@@ -568,6 +613,18 @@ impl LLVM {
 		).into() }
 	}
 
+
+
+
+
+
+	pub fn fill_agg (&self, mut agg: LLVMValue, value: LLVMValue, len: u32) -> LLVMValue {
+		for i in 0..len {
+			agg = self.insert_value(agg, value, i, None::<LLVMString>);
+		}
+
+		agg
+	}
 
 
 	pub fn i2f (&self, signed: bool, e: LLVMValue, new_ty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
@@ -706,7 +763,7 @@ impl LLVM {
 
 
 
-	pub fn phi (&self, ty: impl Into<LLVMTypeRef>, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+	pub fn phi (&self, ty: LLVMType, name: Option<impl Into<LLVMString>>) -> LLVMValue {
 		unsafe { LLVMBuildPhi(self.builder, ty.into(), name.map(Into::into).unwrap_or_default().as_ptr()).into() }
 	}
 
@@ -730,7 +787,7 @@ impl LLVM {
 		unsafe { LLVMBuildBr(self.builder, dest.into()).into() }
 	}
 
-	pub fn ret (&self, ret_val: impl Into<LLVMValueRef>) -> LLVMValue {
+	pub fn ret (&self, ret_val: LLVMValue) -> LLVMValue {
 		unsafe { LLVMBuildRet(self.builder, ret_val.into()).into() }
 	}
 
@@ -740,8 +797,8 @@ impl LLVM {
 	}
 
 
-	pub fn insert_value (&self, agg: Option<impl Into<LLVMValueRef>>, new_field: impl Into<LLVMValueRef>, idx: u32, name: Option<impl Into<LLVMString>>) -> LLVMValue {
-		unsafe { LLVMBuildInsertValue(self.builder, agg.map(Into::into).unwrap_or_else(std::ptr::null_mut), new_field.into(), idx, name.map(Into::into).unwrap_or_default().as_ptr()).into() }
+	pub fn insert_value (&self, agg: LLVMValue, new_field: LLVMValue, idx: u32, name: Option<impl Into<LLVMString>>) -> LLVMValue {
+		unsafe { LLVMBuildInsertValue(self.builder, agg.into(), new_field.into(), idx, name.map(Into::into).unwrap_or_default().as_ptr()).into() }
 	}
 
 	pub fn extract_value (&self, llval: LLVMValue, idx: u32, name: Option<impl Into<LLVMString>>) -> LLVMValue {

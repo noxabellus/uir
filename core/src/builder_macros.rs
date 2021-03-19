@@ -1,6 +1,6 @@
 #[macro_export]
-macro_rules! with_block {
-	($f:expr, $block_name:literal => $body:expr) => {
+macro_rules! block {
+	($f:expr , $block_name:literal $body:block) => {
 		{
 			let block = {
 				$f.append_new_block()
@@ -8,7 +8,7 @@ macro_rules! with_block {
 					.as_key()
 			};
 
-			$crate::with_block!($f, block => $body)
+			$crate::block!($f, block => $body)
 		}
 	};
 

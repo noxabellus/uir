@@ -64,6 +64,14 @@ impl<T> Stack<T> {
 		true
 	}
 
+	pub fn pop_n_to (&mut self, n: usize) -> Option<Stack<T>> {
+		if self.len() < n { return None }
+
+		let index = self.len() - n;
+
+		Some(Self { items: self.items.split_off(index) })
+	}
+
 	pub fn push (&mut self, item: T) {
 		self.items.push(item)
 	}
@@ -102,6 +110,21 @@ impl<T> Stack<T> {
 
 	pub fn from_inner (items: Vec<T>) -> Self {
 		Self { items }
+	}
+
+	pub fn reverse (&mut self) {
+		self.items.reverse()
+	}
+
+	pub fn reversed (mut self) -> Self {
+		self.reverse();
+		self
+	}
+
+	pub fn reversed_clone (&self) -> Self
+	where T: Clone
+	{
+		self.clone().reversed()
 	}
 }
 
