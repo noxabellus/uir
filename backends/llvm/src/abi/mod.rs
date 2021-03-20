@@ -228,6 +228,10 @@ pub trait Abi: Target {
 		self.word_size() as u32 * 8
 	}
 
+	fn llvm_pointer_int (&self, context: LLVMContextRef) -> LLVMType {
+		LLVMType::primitive(context, self.pointer_int())
+	}
+
 	fn llvm_ty_to_prim (&self, ty: LLVMType) -> PrimitiveTy {
 		match ty.kind() {
 			LLVMIntegerTypeKind => match ty.get_int_type_width_bytes() {

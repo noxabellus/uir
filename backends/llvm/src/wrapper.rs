@@ -11,6 +11,12 @@ pub const LLVM_FALSE: LLVMBool = 0;
 pub const LLVM_TRUE: LLVMBool = 1;
 
 
+unsafe fn strlen (p: *const i8) -> usize {
+	let mut len = 0;
+	while *p.add(len) != 0 { len += 1; }
+	len
+}
+
 pub struct LLVMString {
 	bytes: Vec<u8>,
 }
@@ -34,10 +40,11 @@ impl From<String> for LLVMString {
 }
 
 impl From<*const i8> for LLVMString {
+	#[allow(clippy::not_unsafe_ptr_arg_deref)]
 	fn from(s: *const i8) -> LLVMString {
 		unsafe {
-			let strlen = |p: *const i8| -> usize { let mut len = 0; while *p.add(len) != 0 { len += 1; } len };
-			let bytes = std::slice::from_raw_parts(s as _, strlen(s));
+			let len = strlen(s);
+			let bytes = std::slice::from_raw_parts(s as _, len);
 
 			std::str::from_utf8_unchecked(bytes).into()
 		}
@@ -216,30 +223,11 @@ impl<'a> ToLLVMText for &'a [i8] {
 }
 
 
-pub trait OptionalToLLVMText {
-	fn opt_to_lltext (&self) -> *const i8;
-}
-
-impl<T> OptionalToLLVMText for T where T: ToLLVMText {
-	fn opt_to_lltext (&self) -> *const i8 {
-		self.to_lltext()
-	}
-}
-
-
-impl<T> OptionalToLLVMText for Option<T> where T: ToLLVMText {
-	fn opt_to_lltext (&self) -> *const i8 {
-		match self {
-			Some(v) => v.to_lltext(),
-			None => Unnamed.opt_to_lltext()
-		}
-	}
-}
 
 pub struct Unnamed;
-impl OptionalToLLVMText for Unnamed {
-	fn opt_to_lltext (&self) -> *const i8 {
-		b"0" as *const _ as *const _
+impl Unnamed {
+	fn to_lltext (&self) -> *const i8 {
+		b"\0" as *const _ as *const _
 	}
 }
 
@@ -532,7 +520,7 @@ impl LLVMType {
 
 	pub fn is_register (self) -> bool {
 		matches!(self.kind(),
-				LLVMIntegerTypeKind // TODO: does this need to check for integers of size > word size?
+				LLVMIntegerTypeKind // TODO: does this need to check for integers of size > word size? if so, it should be in ABI
 			| LLVMFloatTypeKind
 			| LLVMDoubleTypeKind
 			| LLVMPointerTypeKind
@@ -565,14 +553,14 @@ impl LLVMType {
 	pub fn is_x86_mmx_kind (self) -> bool { self.is_kind(LLVMX86_MMXTypeKind) }
 	pub fn is_token_kind (self) -> bool { self.is_kind(LLVMTokenTypeKind) }
 
-	#[track_caller]
+
 	pub fn get_address_space (self) -> u32 {
 		assert_eq!(self.kind(), LLVMPointerTypeKind);
 
 		unsafe { LLVMGetPointerAddressSpace(self.into()) }
 	}
 
-	#[track_caller]
+
 	pub fn count_param_types (self) -> u32 {
 		assert_eq!(self.kind(), LLVMFunctionTypeKind);
 
@@ -595,33 +583,33 @@ impl LLVMType {
 		unsafe { LLVMGetReturnType(self.into()).into() }
 	}
 
-	#[track_caller]
+
 	pub fn get_int_type_width (self) -> u32 {
 		assert_eq!(self.kind(), LLVMIntegerTypeKind);
 
 		unsafe { LLVMGetIntTypeWidth(self.into()) }
 	}
 
-	#[track_caller]
+
 	pub fn get_int_type_width_bytes (self) -> u32 {
 		(self.get_int_type_width() + 7) / 8
 	}
 
-	#[track_caller]
+
 	pub fn count_element_types (self) -> u32 {
 		assert_eq!(self.kind(), LLVMStructTypeKind);
 
 		unsafe { LLVMCountStructElementTypes(self.0) }
 	}
 
-	#[track_caller]
+
 	pub fn get_array_length (self) -> u32 {
 		assert_eq!(self.kind(), LLVMArrayTypeKind);
 
 		unsafe { LLVMGetArrayLength(self.0) }
 	}
 
-	#[track_caller]
+
 	pub fn get_vector_size (self) -> u32 {
 		assert_eq!(self.kind(), LLVMVectorTypeKind);
 
@@ -640,7 +628,7 @@ impl LLVMType {
 		}
 	}
 
-	#[track_caller]
+
 	pub fn get_element_type (self) -> LLVMType {
 		assert!(matches!(self.kind(), LLVMArrayTypeKind | LLVMVectorTypeKind | LLVMPointerTypeKind));
 
@@ -753,8 +741,201 @@ impl LLVMType {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LLVMNodeKind {
+	LLVMArgumentNodeKind,
+	LLVMBasicBlockNodeKind,
+	LLVMInlineAsmNodeKind,
+	LLVMUserNodeKind,
+	LLVMConstantNodeKind,
+	LLVMBlockAddressNodeKind,
+	LLVMConstantAggregateZeroNodeKind,
+	LLVMConstantArrayNodeKind,
+	LLVMConstantDataSequentialNodeKind,
+	LLVMConstantDataArrayNodeKind,
+	LLVMConstantDataVectorNodeKind,
+	LLVMConstantExprNodeKind,
+	LLVMConstantFPNodeKind,
+	LLVMConstantIntNodeKind,
+	LLVMConstantPointerNullNodeKind,
+	LLVMConstantStructNodeKind,
+	LLVMConstantTokenNoneNodeKind,
+	LLVMConstantVectorNodeKind,
+	LLVMGlobalValueNodeKind,
+	LLVMGlobalAliasNodeKind,
+	LLVMGlobalIFuncNodeKind,
+	LLVMGlobalObjectNodeKind,
+	LLVMFunctionNodeKind,
+	LLVMGlobalVariableNodeKind,
+	LLVMUndefValueNodeKind,
+	LLVMInstructionNodeKind,
+	LLVMUnaryOperatorNodeKind,
+	LLVMBinaryOperatorNodeKind,
+	LLVMCallInstNodeKind,
+	LLVMIntrinsicInstNodeKind,
+	LLVMDbgInfoIntrinsicNodeKind,
+	LLVMDbgVariableIntrinsicNodeKind,
+	LLVMDbgDeclareInstNodeKind,
+	LLVMDbgLabelInstNodeKind,
+	LLVMMemIntrinsicNodeKind,
+	LLVMMemCpyInstNodeKind,
+	LLVMMemMoveInstNodeKind,
+	LLVMMemSetInstNodeKind,
+	LLVMCmpInstNodeKind,
+	LLVMFCmpInstNodeKind,
+	LLVMICmpInstNodeKind,
+	LLVMExtractElementInstNodeKind,
+	LLVMGetElementPtrInstNodeKind,
+	LLVMInsertElementInstNodeKind,
+	LLVMInsertValueInstNodeKind,
+	LLVMLandingPadInstNodeKind,
+	LLVMPHINodeNodeKind,
+	LLVMSelectInstNodeKind,
+	LLVMShuffleVectorInstNodeKind,
+	LLVMStoreInstNodeKind,
+	LLVMBranchInstNodeKind,
+	LLVMIndirectBrInstNodeKind,
+	LLVMInvokeInstNodeKind,
+	LLVMReturnInstNodeKind,
+	LLVMSwitchInstNodeKind,
+	LLVMUnreachableInstNodeKind,
+	LLVMResumeInstNodeKind,
+	LLVMCleanupReturnInstNodeKind,
+	LLVMCatchReturnInstNodeKind,
+	LLVMCatchSwitchInstNodeKind,
+	LLVMCallBrInstNodeKind,
+	LLVMFuncletPadInstNodeKind,
+	LLVMCatchPadInstNodeKind,
+	LLVMCleanupPadInstNodeKind,
+	LLVMUnaryInstructionNodeKind,
+	LLVMAllocaInstNodeKind,
+	LLVMCastInstNodeKind,
+	LLVMAddrSpaceCastInstNodeKind,
+	LLVMBitCastInstNodeKind,
+	LLVMFPExtInstNodeKind,
+	LLVMFPToSIInstNodeKind,
+	LLVMFPToUIInstNodeKind,
+	LLVMFPTruncInstNodeKind,
+	LLVMIntToPtrInstNodeKind,
+	LLVMPtrToIntInstNodeKind,
+	LLVMSExtInstNodeKind,
+	LLVMSIToFPInstNodeKind,
+	LLVMTruncInstNodeKind,
+	LLVMUIToFPInstNodeKind,
+	LLVMZExtInstNodeKind,
+	LLVMExtractValueInstNodeKind,
+	LLVMLoadInstNodeKind,
+	LLVMVAArgInstNodeKind,
+	LLVMFreezeInstNodeKind,
+	LLVMAtomicCmpXchgInstNodeKind,
+	LLVMAtomicRMWInstNodeKind,
+	LLVMFenceInstNodeKind,
+}
+
+impl LLVMNodeKind {
+	pub fn test_node (self, value: LLVMValue) -> bool {
+		LLVMValue(unsafe { (match self {
+			LLVMArgumentNodeKind => LLVMIsAArgument,
+			LLVMBasicBlockNodeKind => LLVMIsABasicBlock,
+			LLVMInlineAsmNodeKind => LLVMIsAInlineAsm,
+			LLVMUserNodeKind => LLVMIsAUser,
+			LLVMConstantNodeKind => LLVMIsAConstant,
+			LLVMBlockAddressNodeKind => LLVMIsABlockAddress,
+			LLVMConstantAggregateZeroNodeKind => LLVMIsAConstantAggregateZero,
+			LLVMConstantArrayNodeKind => LLVMIsAConstantArray,
+			LLVMConstantDataSequentialNodeKind => LLVMIsAConstantDataSequential,
+			LLVMConstantDataArrayNodeKind => LLVMIsAConstantDataArray,
+			LLVMConstantDataVectorNodeKind => LLVMIsAConstantDataVector,
+			LLVMConstantExprNodeKind => LLVMIsAConstantExpr,
+			LLVMConstantFPNodeKind => LLVMIsAConstantFP,
+			LLVMConstantIntNodeKind => LLVMIsAConstantInt,
+			LLVMConstantPointerNullNodeKind => LLVMIsAConstantPointerNull,
+			LLVMConstantStructNodeKind => LLVMIsAConstantStruct,
+			LLVMConstantTokenNoneNodeKind => LLVMIsAConstantTokenNone,
+			LLVMConstantVectorNodeKind => LLVMIsAConstantVector,
+			LLVMGlobalValueNodeKind => LLVMIsAGlobalValue,
+			LLVMGlobalAliasNodeKind => LLVMIsAGlobalAlias,
+			LLVMGlobalIFuncNodeKind => LLVMIsAGlobalIFunc,
+			LLVMGlobalObjectNodeKind => LLVMIsAGlobalObject,
+			LLVMFunctionNodeKind => LLVMIsAFunction,
+			LLVMGlobalVariableNodeKind => LLVMIsAGlobalVariable,
+			LLVMUndefValueNodeKind => LLVMIsAUndefValue,
+			LLVMInstructionNodeKind => LLVMIsAInstruction,
+			LLVMUnaryOperatorNodeKind => LLVMIsAUnaryOperator,
+			LLVMBinaryOperatorNodeKind => LLVMIsABinaryOperator,
+			LLVMCallInstNodeKind => LLVMIsACallInst,
+			LLVMIntrinsicInstNodeKind => LLVMIsAIntrinsicInst,
+			LLVMDbgInfoIntrinsicNodeKind => LLVMIsADbgInfoIntrinsic,
+			LLVMDbgVariableIntrinsicNodeKind => LLVMIsADbgVariableIntrinsic,
+			LLVMDbgDeclareInstNodeKind => LLVMIsADbgDeclareInst,
+			LLVMDbgLabelInstNodeKind => LLVMIsADbgLabelInst,
+			LLVMMemIntrinsicNodeKind => LLVMIsAMemIntrinsic,
+			LLVMMemCpyInstNodeKind => LLVMIsAMemCpyInst,
+			LLVMMemMoveInstNodeKind => LLVMIsAMemMoveInst,
+			LLVMMemSetInstNodeKind => LLVMIsAMemSetInst,
+			LLVMCmpInstNodeKind => LLVMIsACmpInst,
+			LLVMFCmpInstNodeKind => LLVMIsAFCmpInst,
+			LLVMICmpInstNodeKind => LLVMIsAICmpInst,
+			LLVMExtractElementInstNodeKind => LLVMIsAExtractElementInst,
+			LLVMGetElementPtrInstNodeKind => LLVMIsAGetElementPtrInst,
+			LLVMInsertElementInstNodeKind => LLVMIsAInsertElementInst,
+			LLVMInsertValueInstNodeKind => LLVMIsAInsertValueInst,
+			LLVMLandingPadInstNodeKind => LLVMIsALandingPadInst,
+			LLVMPHINodeNodeKind => LLVMIsAPHINode,
+			LLVMSelectInstNodeKind => LLVMIsASelectInst,
+			LLVMShuffleVectorInstNodeKind => LLVMIsAShuffleVectorInst,
+			LLVMStoreInstNodeKind => LLVMIsAStoreInst,
+			LLVMBranchInstNodeKind => LLVMIsABranchInst,
+			LLVMIndirectBrInstNodeKind => LLVMIsAIndirectBrInst,
+			LLVMInvokeInstNodeKind => LLVMIsAInvokeInst,
+			LLVMReturnInstNodeKind => LLVMIsAReturnInst,
+			LLVMSwitchInstNodeKind => LLVMIsASwitchInst,
+			LLVMUnreachableInstNodeKind => LLVMIsAUnreachableInst,
+			LLVMResumeInstNodeKind => LLVMIsAResumeInst,
+			LLVMCleanupReturnInstNodeKind => LLVMIsACleanupReturnInst,
+			LLVMCatchReturnInstNodeKind => LLVMIsACatchReturnInst,
+			LLVMCatchSwitchInstNodeKind => LLVMIsACatchSwitchInst,
+			LLVMCallBrInstNodeKind => LLVMIsACallBrInst,
+			LLVMFuncletPadInstNodeKind => LLVMIsAFuncletPadInst,
+			LLVMCatchPadInstNodeKind => LLVMIsACatchPadInst,
+			LLVMCleanupPadInstNodeKind => LLVMIsACleanupPadInst,
+			LLVMUnaryInstructionNodeKind => LLVMIsAUnaryInstruction,
+			LLVMAllocaInstNodeKind => LLVMIsAAllocaInst,
+			LLVMCastInstNodeKind => LLVMIsACastInst,
+			LLVMAddrSpaceCastInstNodeKind => LLVMIsAAddrSpaceCastInst,
+			LLVMBitCastInstNodeKind => LLVMIsABitCastInst,
+			LLVMFPExtInstNodeKind => LLVMIsAFPExtInst,
+			LLVMFPToSIInstNodeKind => LLVMIsAFPToSIInst,
+			LLVMFPToUIInstNodeKind => LLVMIsAFPToUIInst,
+			LLVMFPTruncInstNodeKind => LLVMIsAFPTruncInst,
+			LLVMIntToPtrInstNodeKind => LLVMIsAIntToPtrInst,
+			LLVMPtrToIntInstNodeKind => LLVMIsAPtrToIntInst,
+			LLVMSExtInstNodeKind => LLVMIsASExtInst,
+			LLVMSIToFPInstNodeKind => LLVMIsASIToFPInst,
+			LLVMTruncInstNodeKind => LLVMIsATruncInst,
+			LLVMUIToFPInstNodeKind => LLVMIsAUIToFPInst,
+			LLVMZExtInstNodeKind => LLVMIsAZExtInst,
+			LLVMExtractValueInstNodeKind => LLVMIsAExtractValueInst,
+			LLVMLoadInstNodeKind => LLVMIsALoadInst,
+			LLVMVAArgInstNodeKind => LLVMIsAVAArgInst,
+			LLVMFreezeInstNodeKind => LLVMIsAFreezeInst,
+			LLVMAtomicCmpXchgInstNodeKind => LLVMIsAAtomicCmpXchgInst,
+			LLVMAtomicRMWInstNodeKind => LLVMIsAAtomicRMWInst,
+			LLVMFenceInstNodeKind => LLVMIsAFenceInst,
+		})(value.into()) }) != LLVMValue::default()
+	}
+}
+
+pub use LLVMNodeKind::*;
+
 
 impl LLVMValue {
+	pub fn set_name (self, name: impl ToLLVMText) {
+		let name = name.to_lltext();
+
+		unsafe { LLVMSetValueName2(self.into(), name, strlen(name))}
+	}
+
 	pub fn verify_function (self, action: LLVMVerifierFailureAction) -> bool {
 		unsafe { LLVMVerifyFunction(self.into(), action) == LLVM_OK }
 	}
@@ -850,6 +1031,195 @@ impl LLVMValue {
 
 	pub fn is_instruction_kind (self) -> bool { self.is_kind(LLVMInstructionValueKind) }
 
+	pub fn node_kind (self) -> Option<LLVMNodeKind> {
+		Some(unsafe { match self.into() {
+			x if LLVMValue(LLVMIsAArgument(x)) != LLVMValue::default() => LLVMArgumentNodeKind,
+			x if LLVMValue(LLVMIsABasicBlock(x)) != LLVMValue::default() => LLVMBasicBlockNodeKind,
+			x if LLVMValue(LLVMIsAInlineAsm(x)) != LLVMValue::default() => LLVMInlineAsmNodeKind,
+			x if LLVMValue(LLVMIsAUser(x)) != LLVMValue::default() => LLVMUserNodeKind,
+			x if LLVMValue(LLVMIsAConstant(x)) != LLVMValue::default() => LLVMConstantNodeKind,
+			x if LLVMValue(LLVMIsABlockAddress(x)) != LLVMValue::default() => LLVMBlockAddressNodeKind,
+			x if LLVMValue(LLVMIsAConstantAggregateZero(x)) != LLVMValue::default() => LLVMConstantAggregateZeroNodeKind,
+			x if LLVMValue(LLVMIsAConstantArray(x)) != LLVMValue::default() => LLVMConstantArrayNodeKind,
+			x if LLVMValue(LLVMIsAConstantDataSequential(x)) != LLVMValue::default() => LLVMConstantDataSequentialNodeKind,
+			x if LLVMValue(LLVMIsAConstantDataArray(x)) != LLVMValue::default() => LLVMConstantDataArrayNodeKind,
+			x if LLVMValue(LLVMIsAConstantDataVector(x)) != LLVMValue::default() => LLVMConstantDataVectorNodeKind,
+			x if LLVMValue(LLVMIsAConstantExpr(x)) != LLVMValue::default() => LLVMConstantExprNodeKind,
+			x if LLVMValue(LLVMIsAConstantFP(x)) != LLVMValue::default() => LLVMConstantFPNodeKind,
+			x if LLVMValue(LLVMIsAConstantInt(x)) != LLVMValue::default() => LLVMConstantIntNodeKind,
+			x if LLVMValue(LLVMIsAConstantPointerNull(x)) != LLVMValue::default() => LLVMConstantPointerNullNodeKind,
+			x if LLVMValue(LLVMIsAConstantStruct(x)) != LLVMValue::default() => LLVMConstantStructNodeKind,
+			x if LLVMValue(LLVMIsAConstantTokenNone(x)) != LLVMValue::default() => LLVMConstantTokenNoneNodeKind,
+			x if LLVMValue(LLVMIsAConstantVector(x)) != LLVMValue::default() => LLVMConstantVectorNodeKind,
+			x if LLVMValue(LLVMIsAGlobalValue(x)) != LLVMValue::default() => LLVMGlobalValueNodeKind,
+			x if LLVMValue(LLVMIsAGlobalAlias(x)) != LLVMValue::default() => LLVMGlobalAliasNodeKind,
+			x if LLVMValue(LLVMIsAGlobalIFunc(x)) != LLVMValue::default() => LLVMGlobalIFuncNodeKind,
+			x if LLVMValue(LLVMIsAGlobalObject(x)) != LLVMValue::default() => LLVMGlobalObjectNodeKind,
+			x if LLVMValue(LLVMIsAFunction(x)) != LLVMValue::default() => LLVMFunctionNodeKind,
+			x if LLVMValue(LLVMIsAGlobalVariable(x)) != LLVMValue::default() => LLVMGlobalVariableNodeKind,
+			x if LLVMValue(LLVMIsAUndefValue(x)) != LLVMValue::default() => LLVMUndefValueNodeKind,
+			x if LLVMValue(LLVMIsAInstruction(x)) != LLVMValue::default() => LLVMInstructionNodeKind,
+			x if LLVMValue(LLVMIsAUnaryOperator(x)) != LLVMValue::default() => LLVMUnaryOperatorNodeKind,
+			x if LLVMValue(LLVMIsABinaryOperator(x)) != LLVMValue::default() => LLVMBinaryOperatorNodeKind,
+			x if LLVMValue(LLVMIsACallInst(x)) != LLVMValue::default() => LLVMCallInstNodeKind,
+			x if LLVMValue(LLVMIsAIntrinsicInst(x)) != LLVMValue::default() => LLVMIntrinsicInstNodeKind,
+			x if LLVMValue(LLVMIsADbgInfoIntrinsic(x)) != LLVMValue::default() => LLVMDbgInfoIntrinsicNodeKind,
+			x if LLVMValue(LLVMIsADbgVariableIntrinsic(x)) != LLVMValue::default() => LLVMDbgVariableIntrinsicNodeKind,
+			x if LLVMValue(LLVMIsADbgDeclareInst(x)) != LLVMValue::default() => LLVMDbgDeclareInstNodeKind,
+			x if LLVMValue(LLVMIsADbgLabelInst(x)) != LLVMValue::default() => LLVMDbgLabelInstNodeKind,
+			x if LLVMValue(LLVMIsAMemIntrinsic(x)) != LLVMValue::default() => LLVMMemIntrinsicNodeKind,
+			x if LLVMValue(LLVMIsAMemCpyInst(x)) != LLVMValue::default() => LLVMMemCpyInstNodeKind,
+			x if LLVMValue(LLVMIsAMemMoveInst(x)) != LLVMValue::default() => LLVMMemMoveInstNodeKind,
+			x if LLVMValue(LLVMIsAMemSetInst(x)) != LLVMValue::default() => LLVMMemSetInstNodeKind,
+			x if LLVMValue(LLVMIsACmpInst(x)) != LLVMValue::default() => LLVMCmpInstNodeKind,
+			x if LLVMValue(LLVMIsAFCmpInst(x)) != LLVMValue::default() => LLVMFCmpInstNodeKind,
+			x if LLVMValue(LLVMIsAICmpInst(x)) != LLVMValue::default() => LLVMICmpInstNodeKind,
+			x if LLVMValue(LLVMIsAExtractElementInst(x)) != LLVMValue::default() => LLVMExtractElementInstNodeKind,
+			x if LLVMValue(LLVMIsAGetElementPtrInst(x)) != LLVMValue::default() => LLVMGetElementPtrInstNodeKind,
+			x if LLVMValue(LLVMIsAInsertElementInst(x)) != LLVMValue::default() => LLVMInsertElementInstNodeKind,
+			x if LLVMValue(LLVMIsAInsertValueInst(x)) != LLVMValue::default() => LLVMInsertValueInstNodeKind,
+			x if LLVMValue(LLVMIsALandingPadInst(x)) != LLVMValue::default() => LLVMLandingPadInstNodeKind,
+			x if LLVMValue(LLVMIsAPHINode(x)) != LLVMValue::default() => LLVMPHINodeNodeKind,
+			x if LLVMValue(LLVMIsASelectInst(x)) != LLVMValue::default() => LLVMSelectInstNodeKind,
+			x if LLVMValue(LLVMIsAShuffleVectorInst(x)) != LLVMValue::default() => LLVMShuffleVectorInstNodeKind,
+			x if LLVMValue(LLVMIsAStoreInst(x)) != LLVMValue::default() => LLVMStoreInstNodeKind,
+			x if LLVMValue(LLVMIsABranchInst(x)) != LLVMValue::default() => LLVMBranchInstNodeKind,
+			x if LLVMValue(LLVMIsAIndirectBrInst(x)) != LLVMValue::default() => LLVMIndirectBrInstNodeKind,
+			x if LLVMValue(LLVMIsAInvokeInst(x)) != LLVMValue::default() => LLVMInvokeInstNodeKind,
+			x if LLVMValue(LLVMIsAReturnInst(x)) != LLVMValue::default() => LLVMReturnInstNodeKind,
+			x if LLVMValue(LLVMIsASwitchInst(x)) != LLVMValue::default() => LLVMSwitchInstNodeKind,
+			x if LLVMValue(LLVMIsAUnreachableInst(x)) != LLVMValue::default() => LLVMUnreachableInstNodeKind,
+			x if LLVMValue(LLVMIsAResumeInst(x)) != LLVMValue::default() => LLVMResumeInstNodeKind,
+			x if LLVMValue(LLVMIsACleanupReturnInst(x)) != LLVMValue::default() => LLVMCleanupReturnInstNodeKind,
+			x if LLVMValue(LLVMIsACatchReturnInst(x)) != LLVMValue::default() => LLVMCatchReturnInstNodeKind,
+			x if LLVMValue(LLVMIsACatchSwitchInst(x)) != LLVMValue::default() => LLVMCatchSwitchInstNodeKind,
+			x if LLVMValue(LLVMIsACallBrInst(x)) != LLVMValue::default() => LLVMCallBrInstNodeKind,
+			x if LLVMValue(LLVMIsAFuncletPadInst(x)) != LLVMValue::default() => LLVMFuncletPadInstNodeKind,
+			x if LLVMValue(LLVMIsACatchPadInst(x)) != LLVMValue::default() => LLVMCatchPadInstNodeKind,
+			x if LLVMValue(LLVMIsACleanupPadInst(x)) != LLVMValue::default() => LLVMCleanupPadInstNodeKind,
+			x if LLVMValue(LLVMIsAUnaryInstruction(x)) != LLVMValue::default() => LLVMUnaryInstructionNodeKind,
+			x if LLVMValue(LLVMIsAAllocaInst(x)) != LLVMValue::default() => LLVMAllocaInstNodeKind,
+			x if LLVMValue(LLVMIsACastInst(x)) != LLVMValue::default() => LLVMCastInstNodeKind,
+			x if LLVMValue(LLVMIsAAddrSpaceCastInst(x)) != LLVMValue::default() => LLVMAddrSpaceCastInstNodeKind,
+			x if LLVMValue(LLVMIsABitCastInst(x)) != LLVMValue::default() => LLVMBitCastInstNodeKind,
+			x if LLVMValue(LLVMIsAFPExtInst(x)) != LLVMValue::default() => LLVMFPExtInstNodeKind,
+			x if LLVMValue(LLVMIsAFPToSIInst(x)) != LLVMValue::default() => LLVMFPToSIInstNodeKind,
+			x if LLVMValue(LLVMIsAFPToUIInst(x)) != LLVMValue::default() => LLVMFPToUIInstNodeKind,
+			x if LLVMValue(LLVMIsAFPTruncInst(x)) != LLVMValue::default() => LLVMFPTruncInstNodeKind,
+			x if LLVMValue(LLVMIsAIntToPtrInst(x)) != LLVMValue::default() => LLVMIntToPtrInstNodeKind,
+			x if LLVMValue(LLVMIsAPtrToIntInst(x)) != LLVMValue::default() => LLVMPtrToIntInstNodeKind,
+			x if LLVMValue(LLVMIsASExtInst(x)) != LLVMValue::default() => LLVMSExtInstNodeKind,
+			x if LLVMValue(LLVMIsASIToFPInst(x)) != LLVMValue::default() => LLVMSIToFPInstNodeKind,
+			x if LLVMValue(LLVMIsATruncInst(x)) != LLVMValue::default() => LLVMTruncInstNodeKind,
+			x if LLVMValue(LLVMIsAUIToFPInst(x)) != LLVMValue::default() => LLVMUIToFPInstNodeKind,
+			x if LLVMValue(LLVMIsAZExtInst(x)) != LLVMValue::default() => LLVMZExtInstNodeKind,
+			x if LLVMValue(LLVMIsAExtractValueInst(x)) != LLVMValue::default() => LLVMExtractValueInstNodeKind,
+			x if LLVMValue(LLVMIsALoadInst(x)) != LLVMValue::default() => LLVMLoadInstNodeKind,
+			x if LLVMValue(LLVMIsAVAArgInst(x)) != LLVMValue::default() => LLVMVAArgInstNodeKind,
+			x if LLVMValue(LLVMIsAFreezeInst(x)) != LLVMValue::default() => LLVMFreezeInstNodeKind,
+			x if LLVMValue(LLVMIsAAtomicCmpXchgInst(x)) != LLVMValue::default() => LLVMAtomicCmpXchgInstNodeKind,
+			x if LLVMValue(LLVMIsAAtomicRMWInst(x)) != LLVMValue::default() => LLVMAtomicRMWInstNodeKind,
+			x if LLVMValue(LLVMIsAFenceInst(x)) != LLVMValue::default() => LLVMFenceInstNodeKind,
+			_ => return None,
+		} })
+	}
+
+	pub fn is_node_kind (self, kind: LLVMNodeKind) -> bool {
+		kind.test_node(self)
+	}
+
+	pub fn is_argument_node (self) -> bool { LLVMValue(unsafe { LLVMIsAArgument(self.into()) }) != LLVMValue::default() }
+	pub fn is_basic_block_node (self) -> bool { LLVMValue(unsafe { LLVMIsABasicBlock(self.into()) }) != LLVMValue::default() }
+	pub fn is_inline_asm_node (self) -> bool { LLVMValue(unsafe { LLVMIsAInlineAsm(self.into()) }) != LLVMValue::default() }
+	pub fn is_user_node (self) -> bool { LLVMValue(unsafe { LLVMIsAUser(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstant(self.into()) }) != LLVMValue::default() }
+	pub fn is_block_address_node (self) -> bool { LLVMValue(unsafe { LLVMIsABlockAddress(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_aggregate_zero_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantAggregateZero(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_array_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantArray(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_data_sequential_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantDataSequential(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_data_array_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantDataArray(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_data_vector_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantDataVector(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_expr_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantExpr(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_fp_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantFP(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_int_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantInt(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_pointer_null_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantPointerNull(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_struct_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantStruct(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_token_none_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantTokenNone(self.into()) }) != LLVMValue::default() }
+	pub fn is_constant_vector_node (self) -> bool { LLVMValue(unsafe { LLVMIsAConstantVector(self.into()) }) != LLVMValue::default() }
+	pub fn is_global_value_node (self) -> bool { LLVMValue(unsafe { LLVMIsAGlobalValue(self.into()) }) != LLVMValue::default() }
+	pub fn is_global_alias_node (self) -> bool { LLVMValue(unsafe { LLVMIsAGlobalAlias(self.into()) }) != LLVMValue::default() }
+	pub fn is_global_ifunc_node (self) -> bool { LLVMValue(unsafe { LLVMIsAGlobalIFunc(self.into()) }) != LLVMValue::default() }
+	pub fn is_global_object_node (self) -> bool { LLVMValue(unsafe { LLVMIsAGlobalObject(self.into()) }) != LLVMValue::default() }
+	pub fn is_function_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFunction(self.into()) }) != LLVMValue::default() }
+	pub fn is_global_variable_node (self) -> bool { LLVMValue(unsafe { LLVMIsAGlobalVariable(self.into()) }) != LLVMValue::default() }
+	pub fn is_undef_value_node (self) -> bool { LLVMValue(unsafe { LLVMIsAUndefValue(self.into()) }) != LLVMValue::default() }
+	pub fn is_instruction_node (self) -> bool { LLVMValue(unsafe { LLVMIsAInstruction(self.into()) }) != LLVMValue::default() }
+	pub fn is_unary_operator_node (self) -> bool { LLVMValue(unsafe { LLVMIsAUnaryOperator(self.into()) }) != LLVMValue::default() }
+	pub fn is_binary_operator_node (self) -> bool { LLVMValue(unsafe { LLVMIsABinaryOperator(self.into()) }) != LLVMValue::default() }
+	pub fn is_call_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACallInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_intrinsic_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAIntrinsicInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_dbg_info_intrinsic_node (self) -> bool { LLVMValue(unsafe { LLVMIsADbgInfoIntrinsic(self.into()) }) != LLVMValue::default() }
+	pub fn is_dbg_variable_intrinsic_node (self) -> bool { LLVMValue(unsafe { LLVMIsADbgVariableIntrinsic(self.into()) }) != LLVMValue::default() }
+	pub fn is_dbg_declare_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsADbgDeclareInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_dbg_label_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsADbgLabelInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_mem_intrinsic_node (self) -> bool { LLVMValue(unsafe { LLVMIsAMemIntrinsic(self.into()) }) != LLVMValue::default() }
+	pub fn is_mem_cpy_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAMemCpyInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_mem_move_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAMemMoveInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_mem_set_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAMemSetInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_cmp_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACmpInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_fcmp_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFCmpInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_icmp_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAICmpInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_extract_element_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAExtractElementInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_get_element_ptr_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAGetElementPtrInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_insert_element_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAInsertElementInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_insert_value_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAInsertValueInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_landing_pad_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsALandingPadInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_phi_node (self) -> bool { LLVMValue(unsafe { LLVMIsAPHINode(self.into()) }) != LLVMValue::default() }
+	pub fn is_select_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsASelectInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_shuffle_vector_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAShuffleVectorInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_store_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAStoreInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_branch_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsABranchInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_indirect_br_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAIndirectBrInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_invoke_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAInvokeInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_return_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAReturnInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_switch_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsASwitchInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_unreachable_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAUnreachableInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_resume_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAResumeInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_cleanup_return_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACleanupReturnInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_catch_return_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACatchReturnInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_catch_switch_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACatchSwitchInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_call_br_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACallBrInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_funclet_pad_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFuncletPadInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_catch_pad_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACatchPadInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_cleanup_pad_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACleanupPadInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_unary_instruction_node (self) -> bool { LLVMValue(unsafe { LLVMIsAUnaryInstruction(self.into()) }) != LLVMValue::default() }
+	pub fn is_alloca_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAAllocaInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_cast_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsACastInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_addr_space_cast_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAAddrSpaceCastInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_bit_cast_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsABitCastInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_fpext_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFPExtInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_fpto_siinst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFPToSIInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_fpto_uiinst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFPToUIInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_fptrunc_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFPTruncInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_int_to_ptr_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAIntToPtrInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_ptr_to_int_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAPtrToIntInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_sext_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsASExtInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_sito_fpinst_node (self) -> bool { LLVMValue(unsafe { LLVMIsASIToFPInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_trunc_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsATruncInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_uito_fpinst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAUIToFPInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_zext_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAZExtInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_extract_value_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAExtractValueInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_load_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsALoadInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_vaarg_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAVAArgInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_freeze_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFreezeInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_atomic_cmp_xchg_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAAtomicCmpXchgInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_atomic_rmwinst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAAtomicRMWInst(self.into()) }) != LLVMValue::default() }
+	pub fn is_fence_inst_node (self) -> bool { LLVMValue(unsafe { LLVMIsAFenceInst(self.into()) }) != LLVMValue::default() }
+
+	//
+	//
+	//
+
 	pub fn count_params (self) -> u32 {
 		assert!(self.is_function_kind());
 
@@ -868,14 +1238,16 @@ impl LLVMValue {
 		buf
 	}
 
+
 	pub fn add_incoming (self, incoming_values: &[LLVMValue], incoming_blocks: &[LLVMBlock]) {
+		assert!(self.is_phi_node());
 		assert_eq!(incoming_values.len(), incoming_blocks.len());
 
-		// TODO: assert this is a phi node
 		unsafe { LLVMAddIncoming(self.into(), incoming_values.as_ptr() as _, incoming_blocks.as_ptr() as _, incoming_values.len() as _) }
 	}
 
 	pub fn add_case (self, predicate: LLVMValue, body: LLVMBlock) {
+		assert!(self.is_switch_inst_node());
 		unsafe { LLVMAddCase(self.into(), predicate.into(), body.into()) }
 	}
 }
@@ -920,8 +1292,8 @@ impl LLVM {
 
 
 
-	pub fn append_basic_block<T: OptionalToLLVMText> (&self, function: LLVMValue, name: T) -> LLVMBlock {
-		unsafe { LLVMAppendBasicBlockInContext(self.ctx, function.into(), name.opt_to_lltext()).into() }
+	pub fn append_basic_block<T: ToLLVMText> (&self, function: LLVMValue, name: T) -> LLVMBlock {
+		unsafe { LLVMAppendBasicBlockInContext(self.ctx, function.into(), name.to_lltext()).into() }
 	}
 
 	pub fn position_at_end (&self, bb: LLVMBlock) {
@@ -930,13 +1302,13 @@ impl LLVM {
 
 
 
-	pub fn gep<T: OptionalToLLVMText> (&self, ty: LLVMType, ptr: LLVMValue, indices: &[LLVMValue], name: T) -> LLVMValue {
+	pub fn gep (&self, ty: LLVMType, ptr: LLVMValue, indices: &[LLVMValue]) -> LLVMValue {
 		unsafe { LLVMBuildGEP2(
 			self.builder,
 			ty.into(), ptr.into(),
 			indices.as_ptr() as _,
 			indices.len() as _,
-			name.opt_to_lltext()
+			Unnamed.to_lltext()
 		).into() }
 	}
 
@@ -947,151 +1319,158 @@ impl LLVM {
 
 	pub fn fill_agg (&self, mut agg: LLVMValue, value: LLVMValue, len: u32) -> LLVMValue {
 		for i in 0..len {
-			agg = self.insert_value(agg, value, i, Unnamed);
+			agg = self.insert_value(agg, value, i);
 		}
 
 		agg
 	}
 
+	pub fn i2p (&self, e: LLVMValue, new_ty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildIntToPtr(self.builder, e.into(), new_ty.into(), Unnamed.to_lltext()) .into() }
+	}
 
-	pub fn i2f<T: OptionalToLLVMText> (&self, signed: bool, e: LLVMValue, new_ty: LLVMType, name: T) -> LLVMValue {
+	pub fn p2i (&self, e: LLVMValue, new_ty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildPtrToInt(self.builder, e.into(), new_ty.into(), Unnamed.to_lltext()) .into() }
+	}
+
+	pub fn i2f (&self, signed: bool, e: LLVMValue, new_ty: LLVMType) -> LLVMValue {
 		let to = if signed { LLVMBuildSIToFP } else { LLVMBuildUIToFP };
-		unsafe { (to)(self.builder, e.into(), new_ty.into(), name.opt_to_lltext()).into() }
+		unsafe { (to)(self.builder, e.into(), new_ty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn f2i<T: OptionalToLLVMText> (&self, signed: bool, e: LLVMValue, new_ty: LLVMType, name: T) -> LLVMValue {
+	pub fn f2i (&self, signed: bool, e: LLVMValue, new_ty: LLVMType) -> LLVMValue {
 		let to = if signed { LLVMBuildFPToSI } else { LLVMBuildFPToUI };
-		unsafe { (to)(self.builder, e.into(), new_ty.into(), name.opt_to_lltext()).into() }
+		unsafe { (to)(self.builder, e.into(), new_ty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn itrunc<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildTrunc(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
+	pub fn itrunc (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildTrunc(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn ftrunc<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFPTrunc(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
+	pub fn ftrunc (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildFPTrunc(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn fext<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFPExt(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
+	pub fn fext (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildFPExt(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn zext<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildZExt(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
+	pub fn zext (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildZExt(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn sext<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildSExt(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
+	pub fn sext (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildSExt(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn trunc_or_bitcast<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildTruncOrBitCast(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
+	pub fn trunc_or_bitcast (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildTruncOrBitCast(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn zext_or_bitcast<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildZExtOrBitCast(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
+	pub fn zext_or_bitcast (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildZExtOrBitCast(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn bitcast<T: OptionalToLLVMText> (&self, llval: LLVMValue, llty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildBitCast(self.builder, llval.into(), llty.into(), name.opt_to_lltext()).into() }
-	}
-
-
-	pub fn not<T: OptionalToLLVMText> (&self, e: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildNot(self.builder, e.into(), name.opt_to_lltext()).into() }
+	pub fn bitcast (&self, llval: LLVMValue, llty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildBitCast(self.builder, llval.into(), llty.into(), Unnamed.to_lltext()).into() }
 	}
 
 
-	pub fn and<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildAnd(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn or<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildOr(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn xor<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildXor(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn logical_r_shift<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildLShr(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn arithmetic_r_shift<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildAShr(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn l_shift<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildShl(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
+	pub fn not (&self, e: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildNot(self.builder, e.into(), Unnamed.to_lltext()).into() }
 	}
 
 
-
-	pub fn icmp<T: OptionalToLLVMText> (&self, pred: LLVMIntPredicate, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildICmp(self.builder, pred, a.into(), b.into(), name.opt_to_lltext()).into() }
+	pub fn and (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildAnd(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn ineg<T: OptionalToLLVMText> (&self, e: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildNeg(self.builder, e.into(), name.opt_to_lltext()).into() }
+	pub fn or (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildOr(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn iadd<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildAdd(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
+	pub fn xor (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildXor(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn isub<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildSub(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
+	pub fn logical_r_shift (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildLShr(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn imul<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildMul(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
+	pub fn arithmetic_r_shift (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildAShr(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn idiv<T: OptionalToLLVMText> (&self, signed: bool, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
+	pub fn l_shift (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildShl(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+
+
+	pub fn icmp (&self, pred: LLVMIntPredicate, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildICmp(self.builder, pred, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn ineg (&self, e: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildNeg(self.builder, e.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn iadd (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildAdd(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn isub (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildSub(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn imul (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildMul(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn idiv (&self, signed: bool, a: LLVMValue, b: LLVMValue) -> LLVMValue {
 		let func = if signed { LLVMBuildSDiv } else { LLVMBuildUDiv };
-		unsafe { (func)(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
+		unsafe { (func)(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn irem<T: OptionalToLLVMText> (&self, signed: bool, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
+	pub fn irem (&self, signed: bool, a: LLVMValue, b: LLVMValue) -> LLVMValue {
 		let func = if signed { LLVMBuildSRem } else { LLVMBuildURem };
-		unsafe { (func)(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
+		unsafe { (func)(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
 
-	pub fn fcmp<T: OptionalToLLVMText> (&self, pred: LLVMRealPredicate, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFCmp(self.builder, pred, a.into(), b.into(), name.opt_to_lltext()).into() }
+	pub fn fcmp (&self, pred: LLVMRealPredicate, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildFCmp(self.builder, pred, a.into(), b.into(), Unnamed.to_lltext()).into() }
 	}
 
-	pub fn fneg<T: OptionalToLLVMText> (&self, e: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFNeg(self.builder, e.into(), name.opt_to_lltext()).into() }
-	}
-
-
-	pub fn fadd<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFAdd(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn fsub<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFSub(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn fmul<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFMul(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn fdiv<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFDiv(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
-	}
-
-	pub fn frem<T: OptionalToLLVMText> (&self, a: LLVMValue, b: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildFRem(self.builder, a.into(), b.into(), name.opt_to_lltext()).into() }
+	pub fn fneg (&self, e: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildFNeg(self.builder, e.into(), Unnamed.to_lltext()).into() }
 	}
 
 
+	pub fn fadd (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildFAdd(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
 
-	pub fn phi<T: OptionalToLLVMText> (&self, ty: LLVMType, name: T) -> LLVMValue {
-		unsafe { LLVMBuildPhi(self.builder, ty.into(), name.opt_to_lltext()).into() }
+	pub fn fsub (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildFSub(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn fmul (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildFMul(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn fdiv (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildFDiv(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn frem (&self, a: LLVMValue, b: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildFRem(self.builder, a.into(), b.into(), Unnamed.to_lltext()).into() }
+	}
+
+
+
+	pub fn phi (&self, ty: LLVMType) -> LLVMValue {
+		unsafe { LLVMBuildPhi(self.builder, ty.into(), Unnamed.to_lltext()).into() }
 	}
 
 	pub fn unreachable (&self) -> LLVMValue {
@@ -1124,38 +1503,38 @@ impl LLVM {
 	}
 
 
-	pub fn insert_value<T: OptionalToLLVMText> (&self, agg: LLVMValue, new_field: LLVMValue, idx: u32, name: T) -> LLVMValue {
-		unsafe { LLVMBuildInsertValue(self.builder, agg.into(), new_field.into(), idx, name.opt_to_lltext()).into() }
+	pub fn insert_value (&self, agg: LLVMValue, new_field: LLVMValue, idx: u32) -> LLVMValue {
+		unsafe { LLVMBuildInsertValue(self.builder, agg.into(), new_field.into(), idx, Unnamed.to_lltext()).into() }
 	}
 
-	pub fn extract_value<T: OptionalToLLVMText> (&self, llval: LLVMValue, idx: u32, name: T) -> LLVMValue {
-		unsafe { LLVMBuildExtractValue(self.builder, llval.into(), idx, name.opt_to_lltext()).into() }
+	pub fn extract_value (&self, llval: LLVMValue, idx: u32) -> LLVMValue {
+		unsafe { LLVMBuildExtractValue(self.builder, llval.into(), idx, Unnamed.to_lltext()).into() }
 	}
 
-	pub fn load<T: OptionalToLLVMText> (&self, llptr: LLVMValue, name: T) -> LLVMValue {
-		unsafe { LLVMBuildLoad(self.builder, llptr.into(), name.opt_to_lltext()).into() }
+	pub fn load (&self, llptr: LLVMValue) -> LLVMValue {
+		unsafe { LLVMBuildLoad(self.builder, llptr.into(), Unnamed.to_lltext()).into() }
 	}
 
 	pub fn store (&self, llval: LLVMValue, llptr: LLVMValue) -> LLVMValue {
 		unsafe { LLVMBuildStore(self.builder, llval.into(), llptr.into()).into() }
 	}
 
-	pub fn call<T: OptionalToLLVMText> (&self, lltype: LLVMType, func: LLVMValue, args: &[LLVMValue], name: T) -> LLVMValue {
+	pub fn call (&self, lltype: LLVMType, func: LLVMValue, args: &[LLVMValue]) -> LLVMValue {
 		unsafe {
 			LLVMBuildCall2(
 				self.builder,
 				lltype.into(), func.into(),
 				args.as_ptr() as _, args.len() as _,
-				name.opt_to_lltext()
+				Unnamed.to_lltext()
 			).into()
 		}
 	}
 
-	pub fn alloca<T: OptionalToLLVMText> (&self, lltype: LLVMType, name: T) -> LLVMValue {
+	pub fn alloca (&self, lltype: LLVMType) -> LLVMValue {
 		unsafe { LLVMBuildAlloca(
 			self.builder,
 			lltype.into(),
-			name.opt_to_lltext()
+			Unnamed.to_lltext()
 		).into() }
 	}
 }

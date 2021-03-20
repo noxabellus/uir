@@ -440,7 +440,7 @@ impl<'a> LLVMBackend<'a> {
 			let llblock = *fstate.blocks.get(&block_key).unwrap();
 			fstate.llblock = llblock;
 			fstate.block_key = block_key;
-			self.emit_block_terminator(&mut fstate, &block_in_vals, block_out_vals.remove(&block_key).unwrap())
+			self.emit_terminator_node(&mut fstate, &block_in_vals, block_out_vals.remove(&block_key).unwrap())
 		}
 
 		llfunc
@@ -453,324 +453,406 @@ impl<'a> LLVMBackend<'a> {
 		let mut iter = block.ir.iter().enumerate().peekable();
 
 		let mut in_vals = Stack::default();
-
-		while let Some((ir_idx, ir)) = iter.next() {
-			match &ir.data {
-				x if x.is_terminator() => unreachable!(),
-
-				IrData::Phi(phi_ty_key) => {
-					// dbg!(phi_ty_key);
-
-					let name = ir.name.as_deref().unwrap_or("phi");
-					let llty = self.emit_ty(*phi_ty_key);
-					let phi = self.ll.phi(llty, LLVMString::from(name));
-					let ty_key = self.ir_ty(fstate, ir_idx);
-
-					let stack_val = Value::source(phi, llty, ir_idx, ty_key);
-
-					in_vals.push(stack_val);
-					fstate.stack.push(stack_val)
-				}
-
-
-				IrData::Constant(constant) => {
-					// dbg!(constant);
-
-					let (llconst, llconst_ty) = self.emit_constant(constant);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llconst, llconst_ty, ir_idx, ty_key))
-				}
-
-
-				IrData::BuildAggregate(ty_key, aggregate_data) => {
-					// dbg!(ty_key, aggregate_data);
-
-					let ty = self.ctx.tys.get(*ty_key).unwrap();
-					let llty = self.emit_ty(*ty_key);
-
-					let llval = match aggregate_data {
-						AggregateData::Uninitialized => LLVMValue::undef(llty),
-						AggregateData::Zeroed => LLVMValue::zero(llty),
-						AggregateData::CopyFill => {
-							let elem = fstate.stack.pop().unwrap();
-
-							let out = LLVMValue::zero(llty);
-
-							match &ty.data {
-								TyData::Array { length, element_ty } => {
-									assert_eq!(self.emit_ty(*element_ty), elem.lltype);
-									self.ll.fill_agg(out, elem.llvalue, *length)
-								}
-
-								TyData::Structure { field_tys } => {
-									field_tys.iter().for_each(|x| assert_eq!(self.emit_ty(*x), elem.lltype));
-									self.ll.fill_agg(out, elem.llvalue, field_tys.len() as u32)
-								}
-
-								_ => unreachable!()
-							}
-						},
-						AggregateData::Indexed(indices) => {
-							let mut out = LLVMValue::zero(llty);
-
-							match &ty.data {
-								TyData::Array { length, element_ty } => {
-									let elem_llty = self.emit_ty(*element_ty);
-
-									for &i in indices.iter() {
-										assert!(i < *length);
-
-										let elem = fstate.stack.pop().unwrap();
-										assert_eq!(elem_llty, elem.lltype);
-
-										out = self.ll.insert_value(out, elem.llvalue, i, Unnamed);
-									}
-								}
-
-								TyData::Structure { field_tys } => {
-									for &i in indices.iter() {
-										let field_ty = *field_tys.get(i as usize).unwrap();
-										let field_llty = self.emit_ty(field_ty);
-
-										let elem = fstate.stack.pop().unwrap();
-										assert_eq!(field_llty, elem.lltype);
-
-										out = self.ll.insert_value(out, elem.llvalue, i, Unnamed);
-									}
-								}
-
-								_ => unreachable!()
-							}
-
-							out
-						},
-
-						AggregateData::Complete => {
-							let mut out = LLVMValue::zero(llty);
-
-							match &ty.data {
-								TyData::Array { length, element_ty } => {
-									let elem_llty = self.emit_ty(*element_ty);
-									for i in 0..*length {
-										let elem = fstate.stack.pop().unwrap();
-										assert_eq!(elem.lltype, elem_llty);
-
-										out = self.ll.insert_value(out, elem.llvalue, i, Unnamed);
-									}
-								}
-
-								TyData::Structure { field_tys } => {
-									for (i, &field_ty) in field_tys.iter().enumerate() {
-										let field_llty = self.emit_ty(field_ty);
-
-										let elem = fstate.stack.pop().unwrap();
-										assert_eq!(elem.lltype, field_llty);
-
-										out = self.ll.insert_value(out, elem.llvalue, i as u32, Unnamed);
-									}
-								}
-
-								_ => unreachable!()
-							}
-
-							out
-						},
-					};
-
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llval, llty, ir_idx, ty_key))
-				}
-
-
-				IrData::GlobalRef(gkey) => {
-					// dbg!(gkey);
-
-					let global = self.ctx.globals.get(*gkey).unwrap();
-					let llg = self.emit_global(*gkey);
-					let llty = self.emit_ty(global.ty).as_pointer(0);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llg, llty, ir_idx, ty_key))
-				}
-
-				IrData::FunctionRef(fkey) => {
-					// dbg!(fkey);
-
-					let function = self.ctx.functions.get(*fkey).unwrap();
-					let llf = self.emit_function_decl(*fkey);
-					let llty = self.emit_ty(function.ty).as_pointer(0);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llf, llty, ir_idx, ty_key))
-				}
-
-				IrData::BlockRef(bkey) => {
-					// dbg!(bkey);
-
-					let llbb = *fstate.blocks.get(bkey).unwrap();
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llbb.as_value(), LLVMType::label(self.ll.ctx), ir_idx, ty_key))
-				}
-
-				IrData::ParamRef(pkey) => {
-					// dbg!(pkey);
-
-					let llparam = *fstate.params.get(pkey).unwrap();
-					let llty = self.emit_ty(fstate.func.param_data.get(*pkey).unwrap().ty).as_pointer(0);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llparam, llty, ir_idx, ty_key))
-				}
-
-				IrData::LocalRef(lkey) => {
-					// dbg!(lkey);
-
-					let llvar = *fstate.locals.get(lkey).unwrap();
-					let llty = self.emit_ty(fstate.func.locals.get(*lkey).unwrap().ty).as_pointer(0);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llvar, llty, ir_idx, ty_key))
-				}
-
-
-				IrData::BinaryOp(bin_op) => {
-					// dbg!(bin_op);
-
-					let a = fstate.stack.pop().unwrap();
-					let b = fstate.stack.pop().unwrap();
-
-					let ty = self.ctx.tys.get(a.ty_key).unwrap();
-
-					assert_eq!(a.lltype, b.lltype);
-
-					let (llvalue, lltype) = self.emit_bin_op(*bin_op, a, b, ty);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llvalue, lltype, ir_idx, ty_key))
-				}
-
-				IrData::UnaryOp(un_op) => {
-					// dbg!(un_op);
-
-					let e = fstate.stack.pop().unwrap();
-
-					let ty = self.ctx.tys.get(e.ty_key).unwrap();
-
-					let (llvalue, lltype) = self.emit_un_op(*un_op, e, ty);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llvalue, lltype, ir_idx, ty_key))
-				}
-
-				IrData::CastOp(cast_op, target_ty_key) => {
-					// dbg!(cast_op, target_ty_key);
-
-					let e = fstate.stack.pop().unwrap();
-
-					let ty = self.ctx.tys.get(e.ty_key).unwrap();
-					let target_ty = self.ctx.tys.get(*target_ty_key).unwrap();
-					let lltype = self.emit_ty(*target_ty_key);
-
-					let llvalue = self.emit_cast_op(*cast_op, e, ty, target_ty, lltype);
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(llvalue, lltype, ir_idx, ty_key))
-				}
-
-				IrData::Gep(gep_num_indices) => {
-					// dbg!(gep_num_indices);
-
-
-					let mut gep_stack = fstate.stack.pop_n_to(*gep_num_indices as usize + 1).unwrap().reversed();
-
-					let Value { llvalue: lltarget, lltype, .. } = gep_stack.pop().unwrap();
-					assert!(lltype.is_pointer_kind());
-					let llbase_ty = lltype.get_element_type();
-
-					let indices =
-						gep_stack
-							.into_iter()
-							.map(|x| {
-								assert!(x.lltype.is_integer_kind());
-								x.llvalue
-							})
-							.collect::<Vec<_>>();
-
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					let llty = self.emit_ty(ty_key);
-					let gep = self.ll.gep(llbase_ty, lltarget, &indices, Unnamed); // TODO: name geps
-					fstate.stack.push(Value::source(gep, llty, ir_idx, ty_key))
-				}
-
-				IrData::Load => {
-					// dbg!("load");
-
-					let Value { lltype, llvalue, .. } = fstate.stack.pop().unwrap();
-					assert!(!lltype.get_element_type().is_function_kind()); // TODO: more robust unloadable type check?
-
-					let load = self.ll.load(llvalue, Unnamed); // TODO: name loads
-					let ty_key = self.ir_ty(fstate, ir_idx);
-					fstate.stack.push(Value::source(load, lltype.get_element_type(), ir_idx, ty_key))
-				}
-
-				IrData::Store => {
-					// dbg!("stor");
-
-					let Value { lltype: llptr_ty, llvalue: llptr, .. } = fstate.stack.pop().unwrap();
-					let Value { lltype: llval_ty, llvalue: llval, .. } = fstate.stack.pop().unwrap();
-					assert_eq!(llptr_ty.get_element_type(), llval_ty);
-
-					self.ll.store(llval, llptr);
-				}
-
-
-
-				IrData::Call => {
-					// dbg!("call");
-
-					if let Some((llval, llty)) = self.emit_call(fstate) {
-						let ty_key = self.ir_ty(fstate, ir_idx);
-						fstate.stack.push(Value::source(llval, llty, ir_idx, ty_key))
-					}
-				}
-
-				IrData::Duplicate => {
-					// dbg!("duplicate");
-
-					let val = *fstate.stack.peek().unwrap();
-					fstate.stack.push(val);
-				}
-
-				IrData::Discard => {
-					// dbg!("discard");
-
-					fstate.stack.pop();
-				}
-
-				IrData::Swap => {
-					// dbg!("swap");
-
-					let a = fstate.stack.pop().unwrap();
-					let b = fstate.stack.pop().unwrap();
-					fstate.stack.push(b);
-					fstate.stack.push(a);
-				}
-
-
-				| IrData::Branch { .. }
-				| IrData::CondBranch { .. }
-				| IrData::Switch { .. }
-				| IrData::ComputedBranch { .. }
-				| IrData::Ret
-				| IrData::Unreachable
-				=> unreachable!()
-			}
-
-			if let Some(&(j, x)) = iter.peek() {
-				if x.is_terminator() {
-					assert_eq!(j, block.ir.len() - 1);
-					return (in_vals, std::mem::take(&mut fstate.stack))
-				}
-			}
+		while let Some(&(ir_idx, ir)) = iter.peek() {
+			if !ir.is_init() { break }
+			in_vals.push(self.emit_init_node(fstate, ir_idx, ir));
+			iter.next();
 		}
 
-		unreachable!()
+		while let Some(&(ir_idx, ir)) = iter.peek() {
+			if ir.is_terminator() { break }
+
+			self.emit_body_node(fstate, ir_idx, ir);
+
+			iter.next();
+		}
+
+		let x = iter.next().unwrap().1;
+		assert!(x.is_terminator());
+		assert!(iter.next().is_none());
+
+		(in_vals, std::mem::take(&mut fstate.stack))
 	}
 
-	pub fn emit_block_terminator (&mut self, fstate: &mut LLVMFunctionState, in_val_map: &HashMap<BlockKey, Stack<Value>>, mut out_vals: Stack<Value>) {
+	pub fn emit_init_node (&mut self, fstate: &mut LLVMFunctionState<'a>, ir_idx: usize, ir: &Ir) -> Value {
+		match &ir.data {
+			IrData::Phi(phi_ty_key) => {
+				// dbg!(phi_ty_key);
+
+				let lltype = self.emit_ty(*phi_ty_key);
+				let llvalue = self.ll.phi(lltype);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+
+				if let Some(name) = ir.name.as_deref() {
+					llvalue.set_name(LLVMString::from(name));
+				}
+
+				let stack_val = Value::source(llvalue, lltype, ir_idx, ty_key);
+
+				fstate.stack.push(stack_val);
+
+				stack_val
+			}
+
+			| IrData::Constant { .. }
+			| IrData::BuildAggregate { .. }
+			| IrData::GlobalRef { .. }
+			| IrData::FunctionRef { .. }
+			| IrData::BlockRef { .. }
+			| IrData::ParamRef { .. }
+			| IrData::LocalRef { .. }
+			| IrData::BinaryOp { .. }
+			| IrData::UnaryOp { .. }
+			| IrData::CastOp { .. }
+			| IrData::Gep { .. }
+			| IrData::Load
+			| IrData::Store
+			| IrData::Branch { .. }
+			| IrData::CondBranch { .. }
+			| IrData::Switch { .. }
+			| IrData::ComputedBranch { .. }
+			| IrData::Call
+			| IrData::Ret
+			| IrData::Duplicate
+			| IrData::Discard
+			| IrData::Swap
+			| IrData::Unreachable
+			=> unreachable!()
+		}
+	}
+
+	pub fn emit_body_node (&mut self, fstate: &mut LLVMFunctionState<'a>, ir_idx: usize, ir: &Ir) -> Option<Value> {
+		match &ir.data {
+			IrData::Phi(_) => unreachable!(),
+
+
+			IrData::Constant(constant) => {
+				// dbg!(constant);
+
+				let (llconst, llconst_ty) = self.emit_constant(constant);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llconst, llconst_ty, ir_idx, ty_key))
+			}
+
+
+			IrData::BuildAggregate(ty_key, aggregate_data) => {
+				// dbg!(ty_key, aggregate_data);
+
+				let ty = self.ctx.tys.get(*ty_key).unwrap();
+				let llty = self.emit_ty(*ty_key);
+
+				let llval = match aggregate_data {
+					AggregateData::Uninitialized => LLVMValue::undef(llty),
+
+					AggregateData::Zeroed => LLVMValue::zero(llty),
+
+					AggregateData::CopyFill => {
+						let elem = fstate.stack.pop().unwrap();
+
+						let out = LLVMValue::zero(llty);
+
+						match &ty.data {
+							TyData::Array { length, element_ty } => {
+								assert_eq!(self.emit_ty(*element_ty), elem.lltype);
+								self.ll.fill_agg(out, elem.llvalue, *length)
+							}
+
+							TyData::Structure { field_tys } => {
+								field_tys.iter().for_each(|x| assert_eq!(self.emit_ty(*x), elem.lltype));
+								self.ll.fill_agg(out, elem.llvalue, field_tys.len() as u32)
+							}
+
+							_ => unreachable!()
+						}
+					},
+
+					AggregateData::Indexed(indices) => {
+						let mut out = LLVMValue::zero(llty);
+
+						match &ty.data {
+							TyData::Array { length, element_ty } => {
+								let elem_llty = self.emit_ty(*element_ty);
+
+								for &i in indices.iter() {
+									assert!(i < *length);
+
+									let elem = fstate.stack.pop().unwrap();
+									assert_eq!(elem_llty, elem.lltype);
+
+									out = self.ll.insert_value(out, elem.llvalue, i);
+								}
+							}
+
+							TyData::Structure { field_tys } => {
+								for &i in indices.iter() {
+									let field_ty = *field_tys.get(i as usize).unwrap();
+									let field_llty = self.emit_ty(field_ty);
+
+									let elem = fstate.stack.pop().unwrap();
+									assert_eq!(field_llty, elem.lltype);
+
+									out = self.ll.insert_value(out, elem.llvalue, i);
+								}
+							}
+
+							_ => unreachable!()
+						}
+
+						out
+					},
+
+					AggregateData::Complete => {
+						let mut out = LLVMValue::zero(llty);
+
+						match &ty.data {
+							TyData::Array { length, element_ty } => {
+								let elem_llty = self.emit_ty(*element_ty);
+								for i in 0..*length {
+									let elem = fstate.stack.pop().unwrap();
+									assert_eq!(elem.lltype, elem_llty);
+
+									out = self.ll.insert_value(out, elem.llvalue, i);
+								}
+							}
+
+							TyData::Structure { field_tys } => {
+								for (i, &field_ty) in field_tys.iter().enumerate() {
+									let field_llty = self.emit_ty(field_ty);
+
+									let elem = fstate.stack.pop().unwrap();
+									assert_eq!(elem.lltype, field_llty);
+
+									out = self.ll.insert_value(out, elem.llvalue, i as u32);
+								}
+							}
+
+							_ => unreachable!()
+						}
+
+						out
+					},
+				};
+
+				if let Some(name) = ir.name.as_deref() {
+					llval.set_name(LLVMString::from(name));
+				}
+
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llval, llty, ir_idx, ty_key))
+			}
+
+
+			IrData::GlobalRef(gkey) => {
+				// dbg!(gkey);
+
+				let global = self.ctx.globals.get(*gkey).unwrap();
+				let llg = self.emit_global(*gkey);
+				let llty = self.emit_ty(global.ty).as_pointer(0);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llg, llty, ir_idx, ty_key))
+			}
+
+			IrData::FunctionRef(fkey) => {
+				// dbg!(fkey);
+
+				let function = self.ctx.functions.get(*fkey).unwrap();
+				let llf = self.emit_function_decl(*fkey);
+				let llty = self.emit_ty(function.ty).as_pointer(0);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llf, llty, ir_idx, ty_key))
+			}
+
+			IrData::BlockRef(bkey) => {
+				// dbg!(bkey);
+
+				let llbb = *fstate.blocks.get(bkey).unwrap();
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llbb.as_value(), LLVMType::label(self.ll.ctx), ir_idx, ty_key))
+			}
+
+			IrData::ParamRef(pkey) => {
+				// dbg!(pkey);
+
+				let llparam = *fstate.params.get(pkey).unwrap();
+				let llty = self.emit_ty(fstate.func.param_data.get(*pkey).unwrap().ty).as_pointer(0);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llparam, llty, ir_idx, ty_key))
+			}
+
+			IrData::LocalRef(lkey) => {
+				// dbg!(lkey);
+
+				let llvar = *fstate.locals.get(lkey).unwrap();
+				let llty = self.emit_ty(fstate.func.locals.get(*lkey).unwrap().ty).as_pointer(0);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llvar, llty, ir_idx, ty_key))
+			}
+
+
+			IrData::BinaryOp(bin_op) => {
+				// dbg!(bin_op);
+
+				let a = fstate.stack.pop().unwrap();
+				let b = fstate.stack.pop().unwrap();
+
+				let ty = self.ctx.tys.get(a.ty_key).unwrap();
+
+				assert_eq!(a.lltype, b.lltype);
+
+				let (llvalue, lltype) = self.emit_bin_op(*bin_op, a, b, ty);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+
+				if let Some(name) = ir.name.as_deref() {
+					llvalue.set_name(LLVMString::from(name));
+				}
+
+				fstate.stack.push(Value::source(llvalue, lltype, ir_idx, ty_key))
+			}
+
+			IrData::UnaryOp(un_op) => {
+				// dbg!(un_op);
+
+				let e = fstate.stack.pop().unwrap();
+
+				let ty = self.ctx.tys.get(e.ty_key).unwrap();
+
+				let (llvalue, lltype) = self.emit_un_op(*un_op, e, ty);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+
+				if let Some(name) = ir.name.as_deref() {
+					llvalue.set_name(LLVMString::from(name));
+				}
+
+				fstate.stack.push(Value::source(llvalue, lltype, ir_idx, ty_key))
+			}
+
+			IrData::CastOp(cast_op, target_ty_key) => {
+				// dbg!(cast_op, target_ty_key);
+
+				let e = fstate.stack.pop().unwrap();
+
+				let ty = self.ctx.tys.get(e.ty_key).unwrap();
+				let target_ty = self.ctx.tys.get(*target_ty_key).unwrap();
+				let lltype = self.emit_ty(*target_ty_key);
+
+				let llvalue = self.emit_cast_op(*cast_op, e, ty, target_ty, lltype);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+
+				if let Some(name) = ir.name.as_deref() {
+					llvalue.set_name(LLVMString::from(name));
+				}
+
+				fstate.stack.push(Value::source(llvalue, lltype, ir_idx, ty_key))
+			}
+
+			IrData::Gep(gep_num_indices) => {
+				// dbg!(gep_num_indices);
+
+				let mut gep_stack = fstate.stack.pop_n_to(*gep_num_indices as usize + 1).unwrap().reversed();
+
+				let Value { llvalue: lltarget, lltype, .. } = gep_stack.pop().unwrap();
+				assert!(lltype.is_pointer_kind());
+				let llbase_ty = lltype.get_element_type();
+
+				let indices =
+					gep_stack
+						.into_iter()
+						.map(|x| {
+							assert!(x.lltype.is_integer_kind());
+							x.llvalue
+						})
+						.collect::<Vec<_>>();
+
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				let llty = self.emit_ty(ty_key);
+				let llvalue = self.ll.gep(llbase_ty, lltarget, &indices);
+
+				if let Some(name) = ir.name.as_deref() {
+					llvalue.set_name(LLVMString::from(name));
+				}
+
+				fstate.stack.push(Value::source(llvalue, llty, ir_idx, ty_key))
+			}
+
+			IrData::Load => {
+				// dbg!("load");
+
+				let Value { lltype, llvalue: lltarget, .. } = fstate.stack.pop().unwrap();
+				assert!(!lltype.get_element_type().is_function_kind()); // TODO: more robust unloadable type check?
+
+				let llvalue = self.ll.load(lltarget);
+				let ty_key = self.ir_ty(fstate, ir_idx);
+
+				if let Some(name) = ir.name.as_deref() {
+					llvalue.set_name(LLVMString::from(name));
+				}
+
+				fstate.stack.push(Value::source(llvalue, lltype.get_element_type(), ir_idx, ty_key))
+			}
+
+			IrData::Store => {
+				// dbg!("stor");
+
+				let Value { lltype: llptr_ty, llvalue: llptr, .. } = fstate.stack.pop().unwrap();
+				let Value { lltype: llval_ty, llvalue: llval, .. } = fstate.stack.pop().unwrap();
+				assert_eq!(llptr_ty.get_element_type(), llval_ty);
+
+				self.ll.store(llval, llptr);
+			}
+
+
+
+			IrData::Call => {
+				// dbg!("call");
+
+				if let Some((llval, llty)) = self.emit_call(fstate) {
+					let ty_key = self.ir_ty(fstate, ir_idx);
+
+					if let Some(name) = ir.name.as_deref() {
+						llval.set_name(LLVMString::from(name));
+					}
+
+					fstate.stack.push(Value::source(llval, llty, ir_idx, ty_key))
+				}
+			}
+
+			IrData::Duplicate => {
+				// dbg!("duplicate");
+
+				let val = *fstate.stack.peek().unwrap();
+
+				fstate.stack.push(val);
+			}
+
+			IrData::Discard => {
+				// dbg!("discard");
+
+				fstate.stack.pop();
+			}
+
+			IrData::Swap => {
+				// dbg!("swap");
+
+				let a = fstate.stack.pop().unwrap();
+				let b = fstate.stack.pop().unwrap();
+				fstate.stack.push(b);
+				fstate.stack.push(a);
+			}
+
+
+			| IrData::Branch { .. }
+			| IrData::CondBranch { .. }
+			| IrData::Switch { .. }
+			| IrData::ComputedBranch { .. }
+			| IrData::Ret
+			| IrData::Unreachable
+			=> unreachable!()
+		}
+
+		None
+	}
+
+	pub fn emit_terminator_node (&mut self, fstate: &mut LLVMFunctionState, in_val_map: &HashMap<BlockKey, Stack<Value>>, mut out_vals: Stack<Value>) {
 		let block = fstate.func.block_data.get(fstate.block_key).unwrap();
 		self.position_at_end(fstate.llblock);
 
@@ -892,22 +974,21 @@ impl<'a> LLVMBackend<'a> {
 
 
 		if abi.result.kind == ArgKind::Indirect {
-			fstate.sret = Some(llparams.next().unwrap());
+			let sret_param = llparams.next().unwrap();
+			sret_param.set_name(llvm_str!("sret_val"));
+			fstate.sret = Some(sret_param);
 		}
 
 
-	 	for (abi_arg, &param_key) in abi.args.iter().zip(fstate.func.param_order.iter()) {
+	 	for (abi_arg, param_key) in abi.args.iter().zip(fstate.func.param_order.iter()) {
 			let param = match abi_arg.kind {
 				ArgKind::Direct => {
-					let alloca = self.ll.alloca(abi_arg.base_type, Unnamed); // TODO: name params
+					let alloca = self.ll.alloca(abi_arg.base_type);
 					let mut abi_ptr = alloca;
 
 					let llvalue = if let Some(ArgAttr::ZExt) = abi_arg.attribute {
-						// TODO: this is currently only handling i8 -> i1
-						let int1 = LLVMType::int1(self.ll.ctx);
-						debug_assert!(abi_arg.base_type == int1);
-
-						self.ll.itrunc(llparams.next().unwrap(), int1, Unnamed) // TODO: name truncs
+						debug_assert!(abi_arg.base_type == LLVMType::int8(self.ll.ctx));
+						self.ll.itrunc(llparams.next().unwrap(), LLVMType::int1(self.ll.ctx))
 					} else if abi_arg.cast_types.is_empty() {
 						llparams.next().unwrap()
 					} else {
@@ -916,10 +997,10 @@ impl<'a> LLVMBackend<'a> {
 						for i in 0..abi_arg.cast_types.len() as u32 {
 							let llparam = llparams.next().unwrap();
 
-							agg = self.ll.insert_value(agg, llparam, i, Unnamed); // TODO: name inserts
+							agg = self.ll.insert_value(agg, llparam, i);
 						}
 
-						abi_ptr = self.ll.bitcast(abi_ptr, cast_ty.as_pointer(0), Unnamed); // TODO: name casts
+						abi_ptr = self.ll.bitcast(abi_ptr, cast_ty.as_pointer(0));
 
 						agg
 					};
@@ -934,13 +1015,23 @@ impl<'a> LLVMBackend<'a> {
 				}
 			};
 
-			fstate.params.insert(param_key, param);
+			if let Some(name) = fstate.func.param_data.get(*param_key).unwrap().name.as_deref() {
+				param.set_name(LLVMString::from(name))
+			}
+
+			fstate.params.insert(*param_key, param);
 		}
 
 
 		for (&local_key, local) in fstate.func.locals.iter() {
 			let lltype = self.emit_ty(local.ty);
-			fstate.locals.insert(local_key, self.alloca(lltype, Unnamed)); // TODO name locals
+			let lllocal = self.alloca(lltype);
+
+			if let Some(name) = local.name.as_deref() {
+				lllocal.set_name(LLVMString::from(name))
+			}
+
+			fstate.locals.insert(local_key, lllocal);
 		}
 
 
@@ -960,8 +1051,8 @@ impl<'a> LLVMBackend<'a> {
 					let Value { llvalue: base_llvalue, .. } = stack.pop().unwrap();
 
 					let llvalue = if abi.result.attribute == Some(ArgAttr::ZExt) {
-						// TODO: this is currently only handling i1 -> i8
-						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), Unnamed) // TODO: name zext
+						debug_assert!(abi.result.base_type == LLVMType::int1(self.ll.ctx));
+						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx))
 					} else if abi.result.cast_types.is_empty() {
 						base_llvalue
 					} else {
@@ -972,12 +1063,12 @@ impl<'a> LLVMBackend<'a> {
 								LLVMType::anonymous_structure(self.ll.ctx, &abi.result.cast_types, false)
 							};
 
-						let alloca = self.ll.alloca(arg_ty, Unnamed); // TODO: name temporary abi alloca?
-						let cast = self.ll.bitcast(alloca, abi.result.base_type.as_pointer(0), Unnamed); // TODO: name cast
+						let alloca = self.ll.alloca(arg_ty);
+						let cast = self.ll.bitcast(alloca, abi.result.base_type.as_pointer(0));
 
 						self.ll.store(base_llvalue, cast);
 
-						self.ll.load(alloca, Unnamed) // TODO: name abi return?
+						self.ll.load(alloca)
 					};
 
 					self.ll.ret(llvalue)
@@ -1000,7 +1091,7 @@ impl<'a> LLVMBackend<'a> {
 
 
 	pub fn emit_call (&mut self, fstate: &mut LLVMFunctionState<'a>) -> Option<(LLVMValue, LLVMType)> {
-		let Value { llvalue, mut lltype, ir_idx, ty_key: _ } = fstate.stack.pop().unwrap();
+		let Value { llvalue, mut lltype, .. } = fstate.stack.pop().unwrap();
 
 		if lltype.is_pointer_kind() { lltype = lltype.get_element_type() }
 
@@ -1015,7 +1106,7 @@ impl<'a> LLVMBackend<'a> {
 		let mut llargs: Vec<LLVMValue> = vec![];
 
 		for abi_arg in abi.args.iter().rev() {
-			let Value { lltype: base_lltype, llvalue: base_llvalue, ir_idx: _, ty_key: _ }
+			let Value { lltype: base_lltype, llvalue: base_llvalue, .. }
 				= fstate.stack.pop().unwrap();
 
 			assert_eq!(base_lltype, abi_arg.base_type);
@@ -1023,21 +1114,19 @@ impl<'a> LLVMBackend<'a> {
 			let value = match abi_arg.kind {
 				ArgKind::Direct => {
 					if let Some(ArgAttr::ZExt) = abi_arg.attribute {
-						// TODO: this is currently only handling i1 -> i8
 						debug_assert!(abi_arg.base_type == LLVMType::int1(self.ll.ctx));
-
-						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), Unnamed) // TODO: name zexts
+						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx))
 					} else if abi_arg.cast_types.is_empty() {
 						base_llvalue
 					} else {
 						let arg_struct = LLVMType::anonymous_structure(self.ll.ctx, &abi_arg.cast_types, false);
 
-						self.ll.bitcast(base_llvalue, arg_struct, Unnamed) // TODO: name destructure casts
+						self.ll.bitcast(base_llvalue, arg_struct)
 					}
 				}
 
 				ArgKind::Indirect => {
-					let llslot = self.ll.alloca(abi_arg.base_type.as_pointer(0), Unnamed); // TODO: name slots
+					let llslot = self.ll.alloca(abi_arg.base_type.as_pointer(0));
 
 					self.ll.store(llslot, base_llvalue)
 				}
@@ -1045,7 +1134,7 @@ impl<'a> LLVMBackend<'a> {
 
 			if abi_arg.cast_types.len() > 1 {
 				for i in 0..abi_arg.cast_types.len() as u32 {
-					llargs.push(self.ll.extract_value(value, i, Unnamed))
+					llargs.push(self.ll.extract_value(value, i))
 				}
 			} else {
 				llargs.push(value);
@@ -1055,28 +1144,21 @@ impl<'a> LLVMBackend<'a> {
 
 
 		if abi.result.kind == ArgKind::Indirect {
-			let name =
-				ir_idx
-					.and_then(|i| self.ir(fstate, i).and_then(|k| k.name.as_ref()))
-					.map(|name| format!("$alloca(sret {})", name))
-					.unwrap_or_else(|| format!("$alloca(sret anon {})", abi.result.base_type));
-
-			let llvalue = self.ll.alloca(abi.result.base_type, LLVMString::from(name));
+			let llvalue = self.ll.alloca(abi.result.base_type);
 
 			llargs.push(llvalue);
 		}
 
 
-		let name = ir_idx.and_then(|i| self.ir(fstate, i)).and_then(|j| j.name.clone()).map(LLVMString::from);
 
 		llargs.reverse();
-		let result = self.ll.call(abi.lltype, llvalue, llargs.as_slice(), name);
+		let result = self.ll.call(abi.lltype, llvalue, llargs.as_slice());
 
 		if abi.result.base_type.is_void_kind() { return None }
 
 		let (llvalue, lltype) = match abi.result.kind {
 			ArgKind::Indirect => {
-				let load = self.ll.load(result, Unnamed); // TODO: name sret loads
+				let load = self.ll.load(result);
 				(load, abi.result.base_type)
 			}
 
@@ -1084,7 +1166,7 @@ impl<'a> LLVMBackend<'a> {
 				(if abi.result.cast_types.is_empty() {
 					result
 				} else {
-					self.ll.bitcast(result, abi.result.base_type, Unnamed) // TODO: name trunc rets
+					self.ll.bitcast(result, abi.result.base_type)
 				}, abi.result.base_type)
 			}
 		};
@@ -1097,56 +1179,57 @@ impl<'a> LLVMBackend<'a> {
 	pub fn emit_bin_op (&self, bin_op: BinaryOp, a: Value, b: Value, ty: &'a Ty) -> (LLVMValue, LLVMType) {
 		use BinaryOp::*;
 
+		let int1 = LLVMType::int1(self.ll.ctx);
 
-		match bin_op {  // TODO: name bin ops
+		match bin_op {
 			Add if ty.is_int()
-			=> (self.ll.iadd(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.iadd(a.llvalue, b.llvalue), a.lltype),
 			Sub if ty.is_int()
-			=> (self.ll.isub(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.isub(a.llvalue, b.llvalue), a.lltype),
 			Mul if ty.is_int()
-			=> (self.ll.imul(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.imul(a.llvalue, b.llvalue), a.lltype),
 			Div if ty.is_int()
-			=> (self.ll.idiv(ty.is_signed(), a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.idiv(ty.is_signed(), a.llvalue, b.llvalue), a.lltype),
 			Rem if ty.is_int()
-			=> (self.ll.irem(ty.is_signed(), a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.irem(ty.is_signed(), a.llvalue, b.llvalue), a.lltype),
 
 
 
 			Add if ty.is_real()
-			=> (self.ll.fadd(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.fadd(a.llvalue, b.llvalue), a.lltype),
 			Sub if ty.is_real()
-			=> (self.ll.fsub(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.fsub(a.llvalue, b.llvalue), a.lltype),
 			Mul if ty.is_real()
-			=> (self.ll.fmul(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.fmul(a.llvalue, b.llvalue), a.lltype),
 			Div if ty.is_real()
-			=> (self.ll.fdiv(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.fdiv(a.llvalue, b.llvalue), a.lltype),
 			Rem if ty.is_real()
-			=> (self.ll.frem(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.frem(a.llvalue, b.llvalue), a.lltype),
 
 
 
 
 			Eq if ty.is_bool() || ty.is_int()
-			=> (self.ll.icmp(LLVMIntEQ, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(LLVMIntEQ, a.llvalue, b.llvalue), int1),
 			Ne if ty.is_bool() || ty.is_int()
-			=> (self.ll.icmp(LLVMIntNE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(LLVMIntNE, a.llvalue, b.llvalue), int1),
 
 			Eq if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealUEQ, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealUEQ, a.llvalue, b.llvalue), int1),
 			Ne if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue), int1),
 
-			Eq if ty.is_pointer() => { // TODO: int to ptr instr
-				let intptr = LLVMType::int(self.ll.ctx, self.abi.word_bits());
-				let lla = self.ll.bitcast(a.llvalue, intptr, Unnamed);
-				let llb = self.ll.bitcast(b.llvalue, intptr, Unnamed);
-				(self.ll.icmp(LLVMIntEQ, lla, llb, Unnamed), LLVMType::int1(self.ll.ctx))
+			Eq if ty.is_pointer() => {
+				let intptr = self.abi.llvm_pointer_int(self.ll.ctx);
+				let lla = self.ll.i2p(a.llvalue, intptr);
+				let llb = self.ll.i2p(b.llvalue, intptr);
+				(self.ll.icmp(LLVMIntEQ, lla, llb), int1)
 			}
 			Ne if ty.is_pointer() => {
-				let intptr = LLVMType::int(self.ll.ctx, self.abi.word_bits());
-				let lla = self.ll.bitcast(a.llvalue, intptr, Unnamed);
-				let llb = self.ll.bitcast(b.llvalue, intptr, Unnamed);
-				(self.ll.icmp(LLVMIntNE, lla, llb, Unnamed), LLVMType::int1(self.ll.ctx))
+				let intptr = self.abi.llvm_pointer_int(self.ll.ctx);
+				let lla = self.ll.i2p(a.llvalue, intptr);
+				let llb = self.ll.i2p(b.llvalue, intptr);
+				(self.ll.icmp(LLVMIntNE, lla, llb), int1)
 			}
 
 			Eq if ty.is_function() => { todo!() } // TODO: function comparison
@@ -1155,43 +1238,43 @@ impl<'a> LLVMBackend<'a> {
 
 
 			Lt if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLT } else { LLVMIntULT }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLT } else { LLVMIntULT }, a.llvalue, b.llvalue), int1),
 			Gt if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGT } else { LLVMIntUGT }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGT } else { LLVMIntUGT }, a.llvalue, b.llvalue), int1),
 			Le if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLE } else { LLVMIntULE }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLE } else { LLVMIntULE }, a.llvalue, b.llvalue), int1),
 			Ge if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGE } else { LLVMIntUGE }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGE } else { LLVMIntUGE }, a.llvalue, b.llvalue), int1),
 
 			Lt if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOLT, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOLT, a.llvalue, b.llvalue), int1),
 			Gt if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOGT, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOGT, a.llvalue, b.llvalue), int1),
 			Le if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOLE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOLE, a.llvalue, b.llvalue), int1),
 			Ge if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOGE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOGE, a.llvalue, b.llvalue), int1),
 
 
 			LAnd if ty.is_bool()
-			=> (self.ll.and(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.and(a.llvalue, b.llvalue), a.lltype),
 			LOr if ty.is_bool()
-			=> (self.ll.or(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.or(a.llvalue, b.llvalue), a.lltype),
 
 
 			BAnd if ty.is_int()
-			=> (self.ll.and(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.and(a.llvalue, b.llvalue), a.lltype),
 			BOr if ty.is_int()
-			=> (self.ll.or(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.or(a.llvalue, b.llvalue), a.lltype),
 			BXor
-			=> (self.ll.xor(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.xor(a.llvalue, b.llvalue), a.lltype),
 
 			LSh
-			=> (self.ll.l_shift(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.l_shift(a.llvalue, b.llvalue), a.lltype),
 			RShA
-			=> (self.ll.arithmetic_r_shift(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.arithmetic_r_shift(a.llvalue, b.llvalue), a.lltype),
 			RShL
-			=> (self.ll.logical_r_shift(a.llvalue, b.llvalue, Unnamed), a.lltype),
+			=> (self.ll.logical_r_shift(a.llvalue, b.llvalue), a.lltype),
 
 			_ => unreachable!()
 		}
@@ -1203,16 +1286,16 @@ impl<'a> LLVMBackend<'a> {
 
 		match un_op {
 			Neg if ty.is_sint()
-			=> (self.ll.ineg(e.llvalue, Unnamed), e.lltype),
+			=> (self.ll.ineg(e.llvalue), e.lltype),
 
 			Neg if ty.is_real()
-			=> (self.ll.fneg(e.llvalue, Unnamed), e.lltype),
+			=> (self.ll.fneg(e.llvalue), e.lltype),
 
 			LNot if ty.is_bool()
-			=> (self.ll.not(e.llvalue, Unnamed), e.lltype),
+			=> (self.ll.not(e.llvalue), e.lltype),
 
 			BNot if ty.is_int()
-			=> (self.ll.not(e.llvalue, Unnamed), e.lltype),
+			=> (self.ll.not(e.llvalue), e.lltype),
 
 
 			_ => unreachable!()
@@ -1224,35 +1307,35 @@ impl<'a> LLVMBackend<'a> {
 
 		match cast_op {
 			IntToReal if ty.is_int() && target_ty.is_real()
-			=> self.ll.i2f(ty.is_signed(), e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.i2f(ty.is_signed(), e.llvalue, lltgt_ty),
 
 			RealToInt if ty.is_real() && target_ty.is_int()
-			=> self.ll.f2i(target_ty.is_signed(), e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.f2i(target_ty.is_signed(), e.llvalue, lltgt_ty),
 
 			ZeroExtend if ty.is_int() && target_ty.is_int()
-			=> self.ll.zext(e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.zext(e.llvalue, lltgt_ty),
 
 			SignExtend if ty.is_int() && target_ty.is_int()
-			=> self.ll.sext(e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.sext(e.llvalue, lltgt_ty),
 
 			RealExtend if ty.is_real() && target_ty.is_real()
-			=> self.ll.fext(e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.fext(e.llvalue, lltgt_ty),
 
 			Truncate if ty.is_int() && target_ty.is_int()
-			=> self.ll.itrunc(e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.itrunc(e.llvalue, lltgt_ty),
 
 			RealTruncate if ty.is_real() && target_ty.is_real()
-			=> self.ll.ftrunc(e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.ftrunc(e.llvalue, lltgt_ty),
 
 			Bitcast if ty.is_primitive() || ty.is_pointer()
-			=> self.ll.bitcast(e.llvalue, lltgt_ty, Unnamed),
+			=> self.ll.bitcast(e.llvalue, lltgt_ty),
 
 			Bitcast if ty.is_aggregate()
 			=> {
-				let alloca = self.ll.alloca(e.lltype.as_pointer(0), Unnamed);
+				let alloca = self.ll.alloca(e.lltype.as_pointer(0));
 				self.ll.store(e.llvalue, alloca);
-				let cast = self.ll.bitcast(alloca, lltgt_ty.as_pointer(0), Unnamed);
-				self.ll.load(cast, Unnamed)
+				let cast = self.ll.bitcast(alloca, lltgt_ty.as_pointer(0));
+				self.ll.load(cast)
 			}
 
 			_ => unreachable!()

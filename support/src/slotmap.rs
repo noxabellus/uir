@@ -1,4 +1,4 @@
-use std::{hash::Hash, ops, slice, vec};
+use std::{hash::Hash, ops, slice, vec, fmt};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Copy)]
@@ -10,7 +10,7 @@ impl From<KeyData> for u64 {
 }
 pub trait Key: Copy + Eq + Hash + Into<KeyData> + From<KeyData> {
 	fn as_keydata (self) -> KeyData { self.into() }
-	fn as_integer (self) -> u64 { self.as_keydata().into() }
+	fn as_integer (self) -> KeyInt { KeyInt(self.as_keydata().into()) }
 }
 impl<T> Key for T where T: Copy + Eq + Hash + Into<KeyData> + From<KeyData> { }
 
@@ -35,7 +35,12 @@ pub fn into_key<K: Key> (k: impl AsKey<K>) -> K {
 	k.as_key()
 }
 
-
+pub struct KeyInt(pub u64);
+impl fmt::Display for KeyInt {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{:#04x}", self.0)
+	}
+}
 
 pub trait Keyable {
 	type Key: Key;

@@ -89,7 +89,7 @@ fn fib () -> IrResult {
 		 .set_name("n-1");
 		f.function_ref(fib);
 		f.call()
-		 .set_name("fib(n-1)");
+		 .set_name("fib_n-1");
 
 		f.param_ref(n);
 		f.load();
@@ -98,7 +98,7 @@ fn fib () -> IrResult {
 		 .set_name("n-2");
 		f.function_ref(fib);
 		f.call()
-		 .set_name("fib(n-2)");
+		 .set_name("fib_n-2");
 
 		f.binary_op(Add);
 
