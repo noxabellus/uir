@@ -119,8 +119,8 @@ fn fib () -> IrResult {
 
 
 
-	let backend = LLVMBackend::new(&context).unwrap();
-	let llfunc = backend.emit_function_body(function);
+	let mut backend = LLVMBackend::new(&context).unwrap();
+	let llfunc = backend.emit_function(function);
 	llfunc.verify_function(LLVMAbortProcessAction);
 
 	let llsrc = std::fs::File::create(llpath).unwrap();
@@ -282,7 +282,7 @@ fn structures () {
 	});
 
 	let const_r64x8 = structure_const!(r64x8 => Complete {
-		4f64, 3f64, 2f64, 1, 9f64, 8f64, 7f64, 6f64,
+		4f64, 3f64, 2f64, 1f64, 9f64, 8f64, 7f64, 6f64,
 	});
 
 
@@ -306,7 +306,7 @@ fn structures () {
 	println!("{}", PrinterState::new(&builder.ctx).print_self());
 
 	{
-		let backend = LLVMBackend::new(&builder.ctx).unwrap();
+		let mut backend = LLVMBackend::new(&builder.ctx).unwrap();
 
 		backend.emit_global(global_s32x2);
 		backend.emit_global(global_s32x4);
@@ -364,8 +364,8 @@ fn structures () {
 
 		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
 
-		let backend = LLVMBackend::new(&builder.ctx).unwrap();
-		let llfunction = backend.emit_function_body(function);
+		let mut backend = LLVMBackend::new(&builder.ctx).unwrap();
+		let llfunction = backend.emit_function(function);
 
 		println!("{:#?}\n{:#?}", backend.emit_ty(ty), llfunction);
 
@@ -419,8 +419,8 @@ fn structures () {
 
 		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
 
-		let backend = LLVMBackend::new(&builder.ctx).unwrap();
-		let llfunction = backend.emit_function_body(function);
+		let mut backend = LLVMBackend::new(&builder.ctx).unwrap();
+		let llfunction = backend.emit_function(function);
 
 		println!("{:#?}\n{:#?}", backend.emit_ty(ty), llfunction);
 

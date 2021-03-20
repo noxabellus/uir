@@ -795,8 +795,7 @@ impl<'c, T> BuilderResult<T, IrErr> {
 }
 
 impl<'c, T: RichUnwrap<'c>> BuilderResult<T, IrErr> {
-
-
+	#[track_caller]
 	pub fn unwrap_rich (self, ctx: &'c Context) -> T {
 		if let Some(err) = self.error {
 			let state = PrinterState::new(ctx).with_error(Some(err));
