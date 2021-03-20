@@ -421,7 +421,7 @@ impl<'a> LLVMBackend<'a> {
 			let block = func.block_data.get(block_key).unwrap();
 			let name = block.name.as_deref().unwrap_or("$block");
 
-			let block = self.ll.append_basic_block(llfunc, Some(name));
+			let block = self.ll.append_basic_block(llfunc, LLVMString::from(name));
 
 			fstate.blocks.insert(block_key, block);
 		}
@@ -472,7 +472,7 @@ impl<'a> LLVMBackend<'a> {
 
 					let name = ir.name.as_deref().unwrap_or("phi");
 					let llty = self.emit_ty(*phi_ty_key);
-					let phi = self.ll.phi(llty, Some(name));
+					let phi = self.ll.phi(llty, LLVMString::from(name));
 					let ty_key = self.ir_ty(fstate, ir_idx);
 
 					let stack_val = Value::source(phi, llty, ir_idx, ty_key);
@@ -532,7 +532,7 @@ impl<'a> LLVMBackend<'a> {
 										let elem = fstate.stack.pop().unwrap();
 										assert_eq!(elem_llty, elem.lltype);
 
-										out = self.ll.insert_value(out, elem.llvalue, i, None::<LLVMString>);
+										out = self.ll.insert_value(out, elem.llvalue, i, Unnamed);
 									}
 								}
 
@@ -544,7 +544,7 @@ impl<'a> LLVMBackend<'a> {
 										let elem = fstate.stack.pop().unwrap();
 										assert_eq!(field_llty, elem.lltype);
 
-										out = self.ll.insert_value(out, elem.llvalue, i, None::<LLVMString>);
+										out = self.ll.insert_value(out, elem.llvalue, i, Unnamed);
 									}
 								}
 
@@ -564,7 +564,7 @@ impl<'a> LLVMBackend<'a> {
 										let elem = fstate.stack.pop().unwrap();
 										assert_eq!(elem.lltype, elem_llty);
 
-										out = self.ll.insert_value(out, elem.llvalue, i, None::<LLVMString>);
+										out = self.ll.insert_value(out, elem.llvalue, i, Unnamed);
 									}
 								}
 
@@ -575,7 +575,7 @@ impl<'a> LLVMBackend<'a> {
 										let elem = fstate.stack.pop().unwrap();
 										assert_eq!(elem.lltype, field_llty);
 
-										out = self.ll.insert_value(out, elem.llvalue, i as u32, None::<LLVMString>);
+										out = self.ll.insert_value(out, elem.llvalue, i as u32, Unnamed);
 									}
 								}
 
@@ -700,7 +700,7 @@ impl<'a> LLVMBackend<'a> {
 
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					let llty = self.emit_ty(ty_key);
-					let gep = self.ll.gep(llbase_ty, lltarget, &indices, None::<LLVMString>); // TODO: name geps
+					let gep = self.ll.gep(llbase_ty, lltarget, &indices, Unnamed); // TODO: name geps
 					fstate.stack.push(Value::source(gep, llty, ir_idx, ty_key))
 				}
 
@@ -710,7 +710,7 @@ impl<'a> LLVMBackend<'a> {
 					let Value { lltype, llvalue, .. } = fstate.stack.pop().unwrap();
 					assert!(!lltype.get_element_type().is_function_kind()); // TODO: more robust unloadable type check?
 
-					let load = self.ll.load(llvalue, None::<LLVMString>); // TODO: name loads
+					let load = self.ll.load(llvalue, Unnamed); // TODO: name loads
 					let ty_key = self.ir_ty(fstate, ir_idx);
 					fstate.stack.push(Value::source(load, lltype.get_element_type(), ir_idx, ty_key))
 				}
@@ -894,7 +894,7 @@ impl<'a> LLVMBackend<'a> {
 		let lltype = self.emit_ty(fstate.func.ty);
 		let abi = self.abi_info(lltype);
 
-		let entry = self.ll.append_basic_block(fstate.llfunc, Some(llvm_str!("abi")));
+		let entry = self.ll.append_basic_block(fstate.llfunc, llvm_str!("abi"));
 		self.ll.position_at_end(entry);
 
 		let mut llparams = fstate.llfunc.get_params().into_iter();
@@ -908,7 +908,7 @@ impl<'a> LLVMBackend<'a> {
 	 	for (abi_arg, &param_key) in abi.args.iter().zip(fstate.func.param_order.iter()) {
 			let param = match abi_arg.kind {
 				ArgKind::Direct => {
-					let alloca = self.ll.alloca(abi_arg.base_type, None::<LLVMString>); // TODO: name params
+					let alloca = self.ll.alloca(abi_arg.base_type, Unnamed); // TODO: name params
 					let mut abi_ptr = alloca;
 
 					let llvalue = if let Some(ArgAttr::ZExt) = abi_arg.attribute {
@@ -916,7 +916,7 @@ impl<'a> LLVMBackend<'a> {
 						let int1 = LLVMType::int1(self.ll.ctx);
 						debug_assert!(abi_arg.base_type == int1);
 
-						self.ll.itrunc(llparams.next().unwrap(), int1, None::<LLVMString>) // TODO: name truncs
+						self.ll.itrunc(llparams.next().unwrap(), int1, Unnamed) // TODO: name truncs
 					} else if abi_arg.cast_types.is_empty() {
 						llparams.next().unwrap()
 					} else {
@@ -925,10 +925,10 @@ impl<'a> LLVMBackend<'a> {
 						for i in 0..abi_arg.cast_types.len() as u32 {
 							let llparam = llparams.next().unwrap();
 
-							agg = self.ll.insert_value(agg, llparam, i, None::<LLVMString>); // TODO: name inserts
+							agg = self.ll.insert_value(agg, llparam, i, Unnamed); // TODO: name inserts
 						}
 
-						abi_ptr = self.ll.bitcast(abi_ptr, cast_ty.as_pointer(0), None::<LLVMString>); // TODO: name casts
+						abi_ptr = self.ll.bitcast(abi_ptr, cast_ty.as_pointer(0), Unnamed); // TODO: name casts
 
 						agg
 					};
@@ -949,7 +949,7 @@ impl<'a> LLVMBackend<'a> {
 
 		for (&local_key, local) in fstate.func.locals.iter() {
 			let lltype = self.emit_ty(local.ty);
-			fstate.locals.insert(local_key, self.alloca(lltype, None::<LLVMString>)); // TODO name locals
+			fstate.locals.insert(local_key, self.alloca(lltype, Unnamed)); // TODO name locals
 		}
 
 
@@ -970,7 +970,7 @@ impl<'a> LLVMBackend<'a> {
 
 					let llvalue = if abi.result.attribute == Some(ArgAttr::ZExt) {
 						// TODO: this is currently only handling i1 -> i8
-						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zext
+						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), Unnamed) // TODO: name zext
 					} else if abi.result.cast_types.is_empty() {
 						base_llvalue
 					} else {
@@ -981,12 +981,12 @@ impl<'a> LLVMBackend<'a> {
 								LLVMType::anonymous_structure(self.ll.ctx, &abi.result.cast_types, false)
 							};
 
-						let alloca = self.ll.alloca(arg_ty, None::<LLVMString>); // TODO: name temporary abi alloca?
-						let cast = self.ll.bitcast(alloca, abi.result.base_type.as_pointer(0), None::<LLVMString>); // TODO: name cast
+						let alloca = self.ll.alloca(arg_ty, Unnamed); // TODO: name temporary abi alloca?
+						let cast = self.ll.bitcast(alloca, abi.result.base_type.as_pointer(0), Unnamed); // TODO: name cast
 
 						self.ll.store(base_llvalue, cast);
 
-						self.ll.load(alloca, None::<LLVMString>) // TODO: name abi return?
+						self.ll.load(alloca, Unnamed) // TODO: name abi return?
 					};
 
 					self.ll.ret(llvalue)
@@ -1035,18 +1035,18 @@ impl<'a> LLVMBackend<'a> {
 						// TODO: this is currently only handling i1 -> i8
 						debug_assert!(abi_arg.base_type == LLVMType::int1(self.ll.ctx));
 
-						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), None::<LLVMString>) // TODO: name zexts
+						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx), Unnamed) // TODO: name zexts
 					} else if abi_arg.cast_types.is_empty() {
 						base_llvalue
 					} else {
 						let arg_struct = LLVMType::anonymous_structure(self.ll.ctx, &abi_arg.cast_types, false);
 
-						self.ll.bitcast(base_llvalue, arg_struct, None::<LLVMString>) // TODO: name destructure casts
+						self.ll.bitcast(base_llvalue, arg_struct, Unnamed) // TODO: name destructure casts
 					}
 				}
 
 				ArgKind::Indirect => {
-					let llslot = self.ll.alloca(abi_arg.base_type.as_pointer(0), None::<LLVMString>); // TODO: name slots
+					let llslot = self.ll.alloca(abi_arg.base_type.as_pointer(0), Unnamed); // TODO: name slots
 
 					self.ll.store(llslot, base_llvalue)
 				}
@@ -1054,7 +1054,7 @@ impl<'a> LLVMBackend<'a> {
 
 			if abi_arg.cast_types.len() > 1 {
 				for i in 0..abi_arg.cast_types.len() as u32 {
-					llargs.push(self.ll.extract_value(value, i, None::<LLVMString>))
+					llargs.push(self.ll.extract_value(value, i, Unnamed))
 				}
 			} else {
 				llargs.push(value);
@@ -1070,13 +1070,13 @@ impl<'a> LLVMBackend<'a> {
 					.map(|name| format!("$alloca(sret {})", name))
 					.unwrap_or_else(|| format!("$alloca(sret anon {})", abi.result.base_type));
 
-			let llvalue = self.ll.alloca(abi.result.base_type, Some(name));
+			let llvalue = self.ll.alloca(abi.result.base_type, LLVMString::from(name));
 
 			llargs.push(llvalue);
 		}
 
 
-		let name = ir_idx.and_then(|i| self.ir(fstate, i)).and_then(|j| j.name.clone());
+		let name = ir_idx.and_then(|i| self.ir(fstate, i)).and_then(|j| j.name.clone()).map(LLVMString::from);
 
 		llargs.reverse();
 		let result = self.ll.call(abi.lltype, llvalue, llargs.as_slice(), name);
@@ -1085,7 +1085,7 @@ impl<'a> LLVMBackend<'a> {
 
 		let (llvalue, lltype) = match abi.result.kind {
 			ArgKind::Indirect => {
-				let load = self.ll.load(result, None::<LLVMString>); // TODO: name sret loads
+				let load = self.ll.load(result, Unnamed); // TODO: name sret loads
 				(load, abi.result.base_type)
 			}
 
@@ -1093,7 +1093,7 @@ impl<'a> LLVMBackend<'a> {
 				(if abi.result.cast_types.is_empty() {
 					result
 				} else {
-					self.ll.bitcast(result, abi.result.base_type, None::<LLVMString>) // TODO: name trunc rets
+					self.ll.bitcast(result, abi.result.base_type, Unnamed) // TODO: name trunc rets
 				}, abi.result.base_type)
 			}
 		};
@@ -1109,53 +1109,53 @@ impl<'a> LLVMBackend<'a> {
 
 		match bin_op {  // TODO: name bin ops
 			Add if ty.is_int()
-			=> (self.ll.iadd(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.iadd(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Sub if ty.is_int()
-			=> (self.ll.isub(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.isub(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Mul if ty.is_int()
-			=> (self.ll.imul(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.imul(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Div if ty.is_int()
-			=> (self.ll.idiv(ty.is_signed(), a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.idiv(ty.is_signed(), a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Rem if ty.is_int()
-			=> (self.ll.irem(ty.is_signed(), a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.irem(ty.is_signed(), a.llvalue, b.llvalue, Unnamed), a.lltype),
 
 
 
 			Add if ty.is_real()
-			=> (self.ll.fadd(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.fadd(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Sub if ty.is_real()
-			=> (self.ll.fsub(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.fsub(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Mul if ty.is_real()
-			=> (self.ll.fmul(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.fmul(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Div if ty.is_real()
-			=> (self.ll.fdiv(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.fdiv(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			Rem if ty.is_real()
-			=> (self.ll.frem(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.frem(a.llvalue, b.llvalue, Unnamed), a.lltype),
 
 
 
 
 			Eq if ty.is_bool() || ty.is_int()
-			=> (self.ll.icmp(LLVMIntEQ, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(LLVMIntEQ, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Ne if ty.is_bool() || ty.is_int()
-			=> (self.ll.icmp(LLVMIntNE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(LLVMIntNE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 
 			Eq if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealUEQ, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealUEQ, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Ne if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 
 			Eq if ty.is_pointer() => { // TODO: int to ptr instr
 				let intptr = LLVMType::int(self.ll.ctx, self.abi.word_bits());
-				let lla = self.ll.bitcast(a.llvalue, intptr, None::<LLVMString>);
-				let llb = self.ll.bitcast(b.llvalue, intptr, None::<LLVMString>);
-				(self.ll.icmp(LLVMIntEQ, lla, llb, None::<LLVMString>), LLVMType::int1(self.ll.ctx))
+				let lla = self.ll.bitcast(a.llvalue, intptr, Unnamed);
+				let llb = self.ll.bitcast(b.llvalue, intptr, Unnamed);
+				(self.ll.icmp(LLVMIntEQ, lla, llb, Unnamed), LLVMType::int1(self.ll.ctx))
 			}
 			Ne if ty.is_pointer() => {
 				let intptr = LLVMType::int(self.ll.ctx, self.abi.word_bits());
-				let lla = self.ll.bitcast(a.llvalue, intptr, None::<LLVMString>);
-				let llb = self.ll.bitcast(b.llvalue, intptr, None::<LLVMString>);
-				(self.ll.icmp(LLVMIntNE, lla, llb, None::<LLVMString>), LLVMType::int1(self.ll.ctx))
+				let lla = self.ll.bitcast(a.llvalue, intptr, Unnamed);
+				let llb = self.ll.bitcast(b.llvalue, intptr, Unnamed);
+				(self.ll.icmp(LLVMIntNE, lla, llb, Unnamed), LLVMType::int1(self.ll.ctx))
 			}
 
 			Eq if ty.is_function() => { todo!() } // TODO: function comparison
@@ -1164,43 +1164,43 @@ impl<'a> LLVMBackend<'a> {
 
 
 			Lt if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLT } else { LLVMIntULT }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLT } else { LLVMIntULT }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Gt if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGT } else { LLVMIntUGT }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGT } else { LLVMIntUGT }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Le if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLE } else { LLVMIntULE }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLE } else { LLVMIntULE }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Ge if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGE } else { LLVMIntUGE }, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGE } else { LLVMIntUGE }, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 
 			Lt if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOLT, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOLT, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Gt if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOGT, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOGT, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Le if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOLE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOLE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 			Ge if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealOGE, a.llvalue, b.llvalue, None::<LLVMString>), LLVMType::int1(self.ll.ctx)),
+			=> (self.ll.fcmp(LLVMRealOGE, a.llvalue, b.llvalue, Unnamed), LLVMType::int1(self.ll.ctx)),
 
 
 			LAnd if ty.is_bool()
-			=> (self.ll.and(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.and(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			LOr if ty.is_bool()
-			=> (self.ll.or(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.or(a.llvalue, b.llvalue, Unnamed), a.lltype),
 
 
 			BAnd if ty.is_int()
-			=> (self.ll.and(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.and(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			BOr if ty.is_int()
-			=> (self.ll.or(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.or(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			BXor
-			=> (self.ll.xor(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.xor(a.llvalue, b.llvalue, Unnamed), a.lltype),
 
 			LSh
-			=> (self.ll.l_shift(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.l_shift(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			RShA
-			=> (self.ll.arithmetic_r_shift(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.arithmetic_r_shift(a.llvalue, b.llvalue, Unnamed), a.lltype),
 			RShL
-			=> (self.ll.logical_r_shift(a.llvalue, b.llvalue, None::<LLVMString>), a.lltype),
+			=> (self.ll.logical_r_shift(a.llvalue, b.llvalue, Unnamed), a.lltype),
 
 			_ => unreachable!()
 		}
@@ -1212,16 +1212,16 @@ impl<'a> LLVMBackend<'a> {
 
 		match un_op {
 			Neg if ty.is_sint()
-			=> (self.ll.ineg(e.llvalue, None::<LLVMString>), e.lltype),
+			=> (self.ll.ineg(e.llvalue, Unnamed), e.lltype),
 
 			Neg if ty.is_real()
-			=> (self.ll.fneg(e.llvalue, None::<LLVMString>), e.lltype),
+			=> (self.ll.fneg(e.llvalue, Unnamed), e.lltype),
 
 			LNot if ty.is_bool()
-			=> (self.ll.not(e.llvalue, None::<LLVMString>), e.lltype),
+			=> (self.ll.not(e.llvalue, Unnamed), e.lltype),
 
 			BNot if ty.is_int()
-			=> (self.ll.not(e.llvalue, None::<LLVMString>), e.lltype),
+			=> (self.ll.not(e.llvalue, Unnamed), e.lltype),
 
 
 			_ => unreachable!()
@@ -1233,35 +1233,35 @@ impl<'a> LLVMBackend<'a> {
 
 		match cast_op {
 			IntToReal if ty.is_int() && target_ty.is_real()
-			=> self.ll.i2f(ty.is_signed(), e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.i2f(ty.is_signed(), e.llvalue, lltgt_ty, Unnamed),
 
 			RealToInt if ty.is_real() && target_ty.is_int()
-			=> self.ll.f2i(target_ty.is_signed(), e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.f2i(target_ty.is_signed(), e.llvalue, lltgt_ty, Unnamed),
 
 			ZeroExtend if ty.is_int() && target_ty.is_int()
-			=> self.ll.zext(e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.zext(e.llvalue, lltgt_ty, Unnamed),
 
 			SignExtend if ty.is_int() && target_ty.is_int()
-			=> self.ll.sext(e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.sext(e.llvalue, lltgt_ty, Unnamed),
 
 			RealExtend if ty.is_real() && target_ty.is_real()
-			=> self.ll.fext(e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.fext(e.llvalue, lltgt_ty, Unnamed),
 
 			Truncate if ty.is_int() && target_ty.is_int()
-			=> self.ll.itrunc(e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.itrunc(e.llvalue, lltgt_ty, Unnamed),
 
 			RealTruncate if ty.is_real() && target_ty.is_real()
-			=> self.ll.ftrunc(e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.ftrunc(e.llvalue, lltgt_ty, Unnamed),
 
 			Bitcast if ty.is_primitive() || ty.is_pointer()
-			=> self.ll.bitcast(e.llvalue, lltgt_ty, None::<LLVMString>),
+			=> self.ll.bitcast(e.llvalue, lltgt_ty, Unnamed),
 
 			Bitcast if ty.is_aggregate()
 			=> {
-				let alloca = self.ll.alloca(e.lltype.as_pointer(0), None::<LLVMString>);
+				let alloca = self.ll.alloca(e.lltype.as_pointer(0), Unnamed);
 				self.ll.store(e.llvalue, alloca);
-				let cast = self.ll.bitcast(alloca, lltgt_ty.as_pointer(0), None::<LLVMString>);
-				self.ll.load(cast, None::<LLVMString>)
+				let cast = self.ll.bitcast(alloca, lltgt_ty.as_pointer(0), Unnamed);
+				self.ll.load(cast, Unnamed)
 			}
 
 			_ => unreachable!()
