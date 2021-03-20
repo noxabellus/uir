@@ -213,6 +213,7 @@ pub struct Layout {
 }
 
 impl Layout {
+	pub fn size_align (&self) -> (u32, u32) { (self.size, self.align) }
 	pub fn custom_scalar (size: u32, align: u32) -> Self { Self { size, align, field_offsets: vec![] } }
 	pub fn scalar (size: u32) -> Self { Self { size, align: size, field_offsets: vec![] } }
 	pub fn structure (size: u32, align: u32, field_offsets: Vec<u32>) -> Self { Self { size, align, field_offsets } }

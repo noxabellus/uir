@@ -10,6 +10,17 @@ pub trait Target: fmt::Debug + Any {
 	fn word_size (&self) -> u32;
 
 	fn pointer_layout (&self) -> Layout { Layout::scalar(self.word_size()) }
+
+	fn pointer_int (&self) -> PrimitiveTy {
+		match self.pointer_layout().size_align() {
+			x if x == self.primitive_layout(PrimitiveTy::UInt8  ).size_align() => PrimitiveTy::UInt8,
+			x if x == self.primitive_layout(PrimitiveTy::UInt16 ).size_align() => PrimitiveTy::UInt16,
+			x if x == self.primitive_layout(PrimitiveTy::UInt32 ).size_align() => PrimitiveTy::UInt32,
+			x if x == self.primitive_layout(PrimitiveTy::UInt64 ).size_align() => PrimitiveTy::UInt64,
+			x if x == self.primitive_layout(PrimitiveTy::UInt128).size_align() => PrimitiveTy::UInt128,
+			_ => unreachable!("Target provided unsupported pointer Layout")
+		}
+	}
 }
 
 

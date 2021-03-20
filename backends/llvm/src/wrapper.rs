@@ -4,10 +4,11 @@ use llvm_sys::analysis::{LLVMVerifierFailureAction, LLVMVerifyFunction};
 pub use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, LLVMValueKind, LLVMValueKind::*, core::*, prelude::*};
 pub use llvm_sys::{LLVMIntPredicate, LLVMIntPredicate::*,};
 pub use llvm_sys::{LLVMRealPredicate, LLVMRealPredicate::*,};
+use uir_core::ty::PrimitiveTy;
 
-pub const LLVMOk: LLVMBool = 0;
-pub const LLVMFalse: LLVMBool = 0;
-pub const LLVMTrue: LLVMBool = 1;
+pub const LLVM_OK: LLVMBool = 0;
+pub const LLVM_FALSE: LLVMBool = 0;
+pub const LLVM_TRUE: LLVMBool = 1;
 
 
 pub struct LLVMString {
@@ -70,6 +71,7 @@ impl LLVMString {
 pub struct LLVMStr(str);
 
 impl LLVMStr {
+	#[allow(clippy::should_implement_trait)]
 	pub fn from_str (s: &str) -> &Self { s.into() }
 	pub fn as_str (&self) -> &str { self.into() }
 
@@ -244,8 +246,8 @@ impl OptionalToLLVMText for Unnamed {
 
 
 macro_rules! llvm_str {
-	($str:literal) => {{
-		LLVMStr::from_str(concat!($str, "\0"))
+	($str:expr) => {{
+		$crate::wrapper::LLVMStr::from_str(concat!($str, "\0"))
 	}};
 }
 
@@ -406,8 +408,135 @@ impl LLVMBlock {
 }
 
 impl LLVMType {
+	pub fn get_context (self) -> LLVMContextRef {
+		unsafe { LLVMGetTypeContext(self.into()) }
+	}
+
+	pub fn equivalent (self, other: LLVMType) -> bool {
+		let (a, b) = (self, other);
+
+		match (a.kind(), b.kind()) {
+			| (LLVMVoidTypeKind, LLVMVoidTypeKind)
+			| (LLVMLabelTypeKind, LLVMLabelTypeKind)
+			| (LLVMMetadataTypeKind, LLVMMetadataTypeKind)
+			| (LLVMHalfTypeKind, LLVMHalfTypeKind)
+			| (LLVMFloatTypeKind, LLVMFloatTypeKind)
+			| (LLVMDoubleTypeKind, LLVMDoubleTypeKind)
+			| (LLVMTokenTypeKind, LLVMTokenTypeKind)
+			| (LLVMFP128TypeKind, LLVMFP128TypeKind)
+			| (LLVMX86_FP80TypeKind, LLVMX86_FP80TypeKind)
+			| (LLVMPPC_FP128TypeKind, LLVMPPC_FP128TypeKind)
+			| (LLVMX86_MMXTypeKind, LLVMX86_MMXTypeKind)
+			=> { true }
+
+			(LLVMIntegerTypeKind, LLVMIntegerTypeKind)
+			=> {
+				let a = a.get_int_type_width();
+				let b = b.get_int_type_width();
+				a == b
+			}
+
+			(LLVMPointerTypeKind, LLVMPointerTypeKind)
+			=> {
+				let ae = a.get_element_type();
+				let be = b.get_element_type();
+				if !ae.equivalent(be) { return false }
+
+				let aa = a.get_address_space();
+				let ba = b.get_address_space();
+				aa == ba
+			}
+
+			(LLVMArrayTypeKind, LLVMArrayTypeKind)
+			=> {
+				let a_len = a.get_array_length();
+				let b_len = b.get_array_length();
+				if a_len != b_len { return false }
+
+				let a = a.get_element_type();
+				let b = b.get_element_type();
+				a.equivalent(b)
+			}
+
+			(LLVMVectorTypeKind, LLVMVectorTypeKind)
+			=> {
+				let a_len = a.get_vector_size();
+				let b_len = b.get_vector_size();
+				if a_len != b_len { return false }
+
+				let a = a.get_element_type();
+				let b = b.get_element_type();
+				a.equivalent(b)
+			}
+
+			(LLVMStructTypeKind, LLVMStructTypeKind) => {
+				let a_len = a.count_element_types();
+				let b_len = a.count_element_types();
+				if a_len != b_len { return false }
+
+				for i in 0..a_len {
+					let a = a.get_type_at_index(i);
+					let b = b.get_type_at_index(i);
+
+					if !a.equivalent(b) { return false }
+				}
+
+				true
+			}
+
+			(LLVMPointerTypeKind, LLVMFunctionTypeKind) => {
+				let a = a.get_element_type();
+				if a.is_function_kind() {
+					a.equivalent(b)
+				} else {
+					false
+				}
+			}
+
+
+			(LLVMFunctionTypeKind, LLVMPointerTypeKind) => {
+				let b = b.get_element_type();
+				if b.is_function_kind() {
+					a.equivalent(b)
+				} else {
+					false
+				}
+			}
+
+			(LLVMFunctionTypeKind, LLVMFunctionTypeKind) => {
+				let a_len = a.count_param_types();
+				let b_len = b.count_param_types();
+				if a_len != b_len { return false }
+
+				let ret_a = a.get_return_type();
+				let ret_b = b.get_return_type();
+
+				if !ret_a.equivalent(ret_b) { return false }
+
+				let a_param_types = a.get_param_types();
+				let b_param_types = b.get_param_types();
+				for (&a, &b) in a_param_types.iter().zip(b_param_types.iter()) {
+					if !a.equivalent(b) { return false }
+				}
+
+				true
+			}
+
+			_ => { false }
+		}
+	}
+
 	pub fn of (value: LLVMValue) -> LLVMType {
 		unsafe { LLVMTypeOf(value.into()).into() }
+	}
+
+	pub fn is_register (self) -> bool {
+		matches!(self.kind(),
+				LLVMIntegerTypeKind // TODO: does this need to check for integers of size > word size?
+			| LLVMFloatTypeKind
+			| LLVMDoubleTypeKind
+			| LLVMPointerTypeKind
+		)
 	}
 
 	pub fn kind (self) -> LLVMTypeKind {
@@ -474,6 +603,11 @@ impl LLVMType {
 	}
 
 	#[track_caller]
+	pub fn get_int_type_width_bytes (self) -> u32 {
+		(self.get_int_type_width() + 7) / 8
+	}
+
+	#[track_caller]
 	pub fn count_element_types (self) -> u32 {
 		assert_eq!(self.kind(), LLVMStructTypeKind);
 
@@ -500,7 +634,7 @@ impl LLVMType {
 
 	pub fn is_packed_struct (self) -> bool {
 		if self.kind() == LLVMStructTypeKind {
-			unsafe { LLVMIsPackedStruct(self.into()) != LLVMFalse }
+			unsafe { LLVMIsPackedStruct(self.into()) != LLVM_FALSE }
 		} else {
 			false
 		}
@@ -519,6 +653,21 @@ impl LLVMType {
 
 	pub fn as_array (self, length: u32) -> LLVMType {
 		Self::array(self, length)
+	}
+
+	pub fn primitive(ctx: LLVMContextRef, prim: PrimitiveTy) -> LLVMType {
+		match prim {
+			PrimitiveTy::Bool => Self::int1(ctx),
+
+			PrimitiveTy::UInt8   | PrimitiveTy::SInt8   => Self::int8(ctx),
+			PrimitiveTy::UInt16  | PrimitiveTy::SInt16  => Self::int16(ctx),
+			PrimitiveTy::UInt32  | PrimitiveTy::SInt32  => Self::int32(ctx),
+			PrimitiveTy::UInt64  | PrimitiveTy::SInt64  => Self::int64(ctx),
+			PrimitiveTy::UInt128 | PrimitiveTy::SInt128 => Self::int128(ctx),
+
+			PrimitiveTy::Real32 => Self::float(ctx),
+			PrimitiveTy::Real64 => Self::double(ctx),
+		}
 	}
 
 	pub fn int (ctx: LLVMContextRef, bits: u32) -> LLVMType {
@@ -586,7 +735,7 @@ impl LLVMType {
 	}
 
 	pub fn anonymous_empty_structure (ctx: LLVMContextRef) -> LLVMType {
-		unsafe { LLVMStructTypeInContext(ctx, std::ptr::null_mut(), 0, LLVMFalse).into() }
+		unsafe { LLVMStructTypeInContext(ctx, std::ptr::null_mut(), 0, LLVM_FALSE).into() }
 	}
 
 	pub fn structure_set_body (self, field_tys: &[LLVMType], packed: bool) {
@@ -607,7 +756,7 @@ impl LLVMType {
 
 impl LLVMValue {
 	pub fn verify_function (self, action: LLVMVerifierFailureAction) -> bool {
-		unsafe { LLVMVerifyFunction(self.into(), action) == LLVMOk }
+		unsafe { LLVMVerifyFunction(self.into(), action) == LLVM_OK }
 	}
 
 	pub fn undef (ty: LLVMType) -> LLVMValue {

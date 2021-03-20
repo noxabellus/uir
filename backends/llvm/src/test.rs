@@ -19,6 +19,7 @@ use {
 	BinaryOp::*,
 	crate::{
 		LLVMBackend,
+		wrapper::*,
 	},
 };
 
@@ -426,4 +427,144 @@ fn structures () {
 
 		llfunction.verify_function(LLVMAbortProcessAction);
 	}
+}
+
+#[test]
+fn hacky_abi_test () {
+
+	use llvm_sys::bit_reader::LLVMParseBitcodeInContext2;
+    use uir_core::{builder, ir, support::slotmap::AsKey};
+
+	macro_rules! build_c_abi_str {
+		(%MAIN% $name:ident ($( $field_name:ident : $field_ty:ident ),*)) => {
+			concat!("int main () {\n",
+				"\tint $counter = 0;\n",
+				$( "\t",stringify!($field_ty)," ",stringify!($field_name)," = (",stringify!($field_ty),") ++$counter;\n", )*
+				"\tfn_direct_",stringify!($name),"(",stringify!($($field_name),*),");\n",
+				"\tfn_struct_",stringify!($name),"((",stringify!($name),") { ",stringify!($($field_name),*)," });\n",
+				"\treturn 0;\n",
+			"}\n")
+		};
+		(%BASE%) => {
+r#"typedef void void_ty;
+typedef char bool;
+typedef float real32_ty;
+typedef double real64_ty;
+typedef char sint8_ty;
+typedef short sint16_ty;
+typedef int sint32_ty;
+typedef long sint64_ty;
+typedef unsigned char uint8_ty;
+typedef unsigned short uint16_ty;
+typedef unsigned int uint32_ty;
+typedef unsigned long uint64_ty;
+"#
+		};
+		( $name:ident ($( $field_name:ident : $field_ty:ident ),*) ) => {
+			concat!(
+				build_c_abi_str!(%BASE%),
+				"typedef struct {\n",
+					$( "\t",stringify!($field_ty)," ",stringify!($field_name),";\n", )*
+				"} ", stringify!($name),";\n",
+				"extern ",build_c_abi_str!(%GET_TY% $name ($($field_name)*))," fn_direct_",stringify!($name),"(",stringify!($($field_ty),*),");\n",
+				"extern ",stringify!($name)," fn_struct_",stringify!($name), "(", stringify!($name), ");\n",
+				build_c_abi_str!(%MAIN% $name ($( $field_name : $field_ty ),*))
+			)
+		};
+
+		(%GET_TY% $struct_name:ident ()) => { "void" };
+		(%GET_TY% $struct_name:ident ($single:ident)) => { stringify!($single) };
+		(%GET_TY% $struct_name:ident ($first:ident $($more:ident)+)) => { stringify!($struct_name) };
+	}
+
+	macro_rules! build_abi_tests {
+		( $(
+			$name:ident ($( $field_name:ident : $field_ty:ident ),*)
+		)* ) => { {
+			$( {
+				let mut ctx = ir::Context::new();
+				let mut builder = builder::Builder::new(&mut ctx);
+
+				let tys = &[ 	$( builder.$field_ty().as_key() ),* ];
+				let struct_ty = builder.structure_ty(tys.to_vec()).unwrap().set_name(stringify!($name)).as_key();
+
+				let struct_function_ty = builder.function_ty(vec! [ struct_ty ], Some(struct_ty)).unwrap().as_key();
+				let mut backend = LLVMBackend::new(&ctx).unwrap();
+
+				let ll_struct_function_user_ty = backend.emit_ty(struct_function_ty);
+				let struct_function_abi = backend.abi_info(ll_struct_function_user_ty);
+				let ll_struct_function_ty = struct_function_abi.lltype;
+
+				let ll_struct_function = LLVMValue::create_function(backend.module, ll_struct_function_ty, llvm_str!(concat!("fn_struct_", stringify!($name))));
+				struct_function_abi.apply_attributes(backend.ll.ctx, ll_struct_function);
+
+				let ll_mod = llvm_from_c(build_c_abi_str!($name ($( $field_name : $field_ty ),*)));
+
+				let truth_ll_struct_function = LLVMValue::get_function(ll_mod, llvm_str!(concat!("fn_struct_", stringify!($name))));
+				let truth_ll_struct_function_ty = LLVMType::of(truth_ll_struct_function);
+
+				println!("struct abi: {:#?}", struct_function_abi);
+				println!();
+				println!("got: {:#?}\nexpected: {:#?}", ll_struct_function, truth_ll_struct_function);
+				println!();
+				println!("got: {}\nexpected: {}", ll_struct_function_ty, truth_ll_struct_function_ty);
+				assert!(truth_ll_struct_function_ty.equivalent(ll_struct_function_ty));
+			} )*
+		} };
+	}
+
+
+
+
+	fn llvm_from_c (c_code: &str) -> LLVMModuleRef {
+		// echo "int main () { return 1; }" | clang -xc -c -emit-llvm -o- - | llvm-dis
+		use std::process::{ Command, Stdio };
+		use std::io::Write;
+		use std::mem::MaybeUninit;
+		let mut clang =
+			Command::new("clang")
+				.arg("-xc")
+				.arg("-c")
+				.arg("-emit-llvm")
+				.arg("-o-")
+				.arg("-")
+				.stdin(Stdio::piped())
+				.stdout(Stdio::piped())
+				.spawn()
+				.unwrap();
+
+		clang.stdin.as_mut().unwrap().write_all(c_code.as_bytes()).unwrap();
+
+		let clang_output = clang.wait_with_output().unwrap().stdout;
+
+		unsafe {
+			let context = LLVMContextCreate();
+			let mut module = MaybeUninit::uninit();
+
+			let buff = LLVMCreateMemoryBufferWithMemoryRange(clang_output.as_ptr() as *const _, clang_output.len() as _, llvm_str!("harness bitcode").as_ptr(), LLVM_FALSE);
+			assert!(LLVMParseBitcodeInContext2(context, buff, module.as_mut_ptr()) == LLVM_OK, "Cannot load bitcode harness module");
+			LLVMDisposeMemoryBuffer(buff);
+
+			module.assume_init()
+		}
+	}
+
+	fn build_abi_tests () {
+		build_abi_tests! {
+			i32_2(x: sint32_ty, y: sint32_ty)
+			i64_2(x: sint64_ty, y: sint64_ty)
+			i32_4(x: sint32_ty, y: sint32_ty, z: sint32_ty, w: sint32_ty)
+			i64_4(x: sint64_ty, y: sint64_ty, z: sint64_ty, w: sint64_ty)
+			i32_i16(x: sint32_ty, y: sint16_ty)
+			i16_i32(x: sint16_ty, y: sint32_ty)
+			i16_4(x: sint16_ty, y: sint16_ty, z: sint16_ty, w: sint16_ty)
+			i16_8(x0: sint16_ty, y0: sint16_ty, z0: sint16_ty, w0: sint16_ty, x1: sint16_ty, y1: sint16_ty, z1: sint16_ty, w1: sint16_ty)
+			f32_2(x: real32_ty, y: real32_ty)
+			f32_4(x: real32_ty, y: real32_ty, z: real32_ty, w: real32_ty)
+			f64_2(x: real64_ty, y: real64_ty)
+			f64_4(x: real64_ty, y: real64_ty, z: real32_ty, w: real32_ty)
+		}
+	}
+
+	build_abi_tests()
 }

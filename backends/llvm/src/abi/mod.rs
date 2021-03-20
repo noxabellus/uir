@@ -1,7 +1,11 @@
 use crate::wrapper::*;
 
 use std::any::{ TypeId };
-use uir_core::target::{self, Target};
+use uir_core::{
+	support::utils::clamp,
+	target::{self, Target},
+	ty::PrimitiveTy
+};
 
 
 mod amd64;
@@ -213,10 +217,110 @@ impl Function {
 }
 
 
+
+fn llvm_align_formula (offset: u32, align: u32) -> u32 {
+	(offset + align - 1) / align * align
+}
+
 pub trait Abi: Target {
 	fn get_info (&self, context: LLVMContextRef, args: &[LLVMType], ret_ty: LLVMType) -> Function;
 	fn word_bits (&self) -> u32 {
 		self.word_size() as u32 * 8
+	}
+
+	fn llvm_ty_to_prim (&self, ty: LLVMType) -> PrimitiveTy {
+		match ty.kind() {
+			LLVMIntegerTypeKind => match ty.get_int_type_width_bytes() {
+				1 => PrimitiveTy::UInt8,
+				2 => PrimitiveTy::UInt16,
+				4 => PrimitiveTy::UInt32,
+				8 => PrimitiveTy::UInt64,
+				16 => PrimitiveTy::UInt128,
+				x => unreachable!("Cannot create prim ty from unsupported integer size {:?}", x)
+			},
+			LLVMFloatTypeKind => PrimitiveTy::Real32,
+			LLVMDoubleTypeKind => PrimitiveTy::Real64,
+			LLVMPointerTypeKind => self.pointer_int(),
+			LLVMX86_MMXTypeKind => PrimitiveTy::Real64,
+			x => unreachable!("Cannot create prim ty from unsupported type {:?}", x)
+		}
+	}
+
+	fn size_of (&self, ty: LLVMType) -> u32 {
+		match ty.kind() {
+			LLVMVoidTypeKind => 0,
+
+			| LLVMIntegerTypeKind
+			| LLVMFloatTypeKind
+			| LLVMDoubleTypeKind
+			| LLVMPointerTypeKind
+			| LLVMX86_MMXTypeKind
+			=> self.primitive_layout(self.llvm_ty_to_prim(ty)).size,
+
+			LLVMStructTypeKind => {
+				let field_count: u32 = ty.count_element_types();
+				let mut offset = 0;
+				if ty.is_packed_struct() {
+					for i in 0..field_count {
+						let field = ty.get_type_at_index(i);
+						offset += self.size_of(field);
+					}
+				} else {
+					for i in 0..field_count {
+						let field = ty.get_type_at_index(i);
+						let align = self.align_of(field);
+						offset = llvm_align_formula(offset, align);
+						offset += self.size_of(field);
+					}
+					offset = llvm_align_formula(offset, self.align_of(ty));
+				}
+				offset
+			}
+			LLVMArrayTypeKind => {
+				let elem = ty.get_element_type();
+				let elem_size = self.size_of(elem);
+				let count = ty.get_array_length();
+				count * elem_size
+			}
+
+			LLVMVectorTypeKind => {
+				clamp((ty.get_array_length() * self.size_of(ty.get_element_type())).next_power_of_two(), 1, 16)
+			},
+
+			_ => unreachable!("Unhandled type for size_of: {:?}", ty)
+		}
+	}
+
+	fn align_of (&self, ty: LLVMType) -> u32 {
+		match ty.kind() {
+			LLVMVoidTypeKind => 1,
+
+			| LLVMIntegerTypeKind
+			| LLVMFloatTypeKind
+			| LLVMDoubleTypeKind
+			| LLVMPointerTypeKind
+			| LLVMX86_MMXTypeKind
+			=> self.primitive_layout(self.llvm_ty_to_prim(ty)).align,
+
+			LLVMStructTypeKind => {
+				if ty.is_packed_struct() {
+					1
+				} else {
+					let field_count = ty.count_element_types();
+					let mut max_align = 1;
+					for i in 0..field_count {
+						let field = ty.get_type_at_index(i);
+						let field_align = self.align_of(field);
+						max_align = max_align.max(field_align);
+					}
+					max_align
+				}
+			}
+			LLVMArrayTypeKind => self.align_of(ty.get_element_type()),
+			LLVMVectorTypeKind =>	clamp((ty.get_array_length() * self.size_of(ty.get_element_type())).next_power_of_two(), 1, 16),
+
+			_ => unreachable!("Unhandled type for align_of: {:?}", ty)
+		}
 	}
 }
 
