@@ -243,9 +243,9 @@ impl ops::DerefMut for Ty {
 impl Ty {
 	pub fn equivalent	(&self, other: &Self) -> bool {
 		    other.data == self.data
-		&& (other.name.is_none()   || other.name   == self.name  )
-		&& (other.meta.is_empty()  || other.meta   == self.meta  )
-		&& (other.src.is_none()    || other.src    == self.src   )
+		&& (other.name.is_none()  || other.name == self.name)
+		&& (other.meta.is_empty() || other.meta == self.meta)
+		&& (other.src.is_none()   || other.src  == self.src )
 		&& (other.layout.borrow().is_none() || other.layout == self.layout)
 	}
 

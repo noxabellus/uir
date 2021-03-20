@@ -111,7 +111,7 @@ fn fib () -> IrResult {
 		f.ret();
 	});
 
-	let PartialResult { value: function, error } = f.finalize();
+	let BuilderResult { value: function, error } = f.finalize();
 	let function = function.as_key();
 
 	let ir_src = std::fs::File::create(ir_path).unwrap();
@@ -121,6 +121,7 @@ fn fib () -> IrResult {
 
 	let backend = LLVMBackend::new(&context).unwrap();
 	let llfunc = backend.emit_function_body(function);
+	llfunc.verify_function(LLVMAbortProcessAction);
 
 	let llsrc = std::fs::File::create(llpath).unwrap();
 	write!(&llsrc, "{:?}", llfunc).unwrap();
@@ -281,25 +282,25 @@ fn structures () {
 	});
 
 	let const_r64x8 = structure_const!(r64x8 => Complete {
-		4f64, 3f64, 2f64, 1f64, 9f64, 8f64, 7f64, 6f64,
+		4f64, 3f64, 2f64, 1, 9f64, 8f64, 7f64, 6f64,
 	});
 
 
-	let global_s32x2 = builder.create_global(s32x2, Some(const_s32x2)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_s32x4 = builder.create_global(s32x4, Some(const_s32x4)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_s32x8 = builder.create_global(s32x8, Some(const_s32x8)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
+	let global_s32x2 = builder.create_global(s32x2, Some(const_s32x2)).map(into_key).unwrap_rich(builder.ctx);
+	let global_s32x4 = builder.create_global(s32x4, Some(const_s32x4)).map(into_key).unwrap_rich(builder.ctx);
+	let global_s32x8 = builder.create_global(s32x8, Some(const_s32x8)).map(into_key).unwrap_rich(builder.ctx);
 
-	let global_s64x2 = builder.create_global(s64x2, Some(const_s64x2)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_s64x4 = builder.create_global(s64x4, Some(const_s64x4)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_s64x8 = builder.create_global(s64x8, Some(const_s64x8)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
+	let global_s64x2 = builder.create_global(s64x2, Some(const_s64x2)).map(into_key).unwrap_rich(builder.ctx);
+	let global_s64x4 = builder.create_global(s64x4, Some(const_s64x4)).map(into_key).unwrap_rich(builder.ctx);
+	let global_s64x8 = builder.create_global(s64x8, Some(const_s64x8)).map(into_key).unwrap_rich(builder.ctx);
 
-	let global_r32x2 = builder.create_global(r32x2, Some(const_r32x2)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_r32x4 = builder.create_global(r32x4, Some(const_r32x4)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_r32x8 = builder.create_global(r32x8, Some(const_r32x8)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
+	let global_r32x2 = builder.create_global(r32x2, Some(const_r32x2)).map(into_key).unwrap_rich(builder.ctx);
+	let global_r32x4 = builder.create_global(r32x4, Some(const_r32x4)).map(into_key).unwrap_rich(builder.ctx);
+	let global_r32x8 = builder.create_global(r32x8, Some(const_r32x8)).map(into_key).unwrap_rich(builder.ctx);
 
-	let global_r64x2 = builder.create_global(r64x2, Some(const_r64x2)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_r64x4 = builder.create_global(r64x4, Some(const_r64x4)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
-	let global_r64x8 = builder.create_global(r64x8, Some(const_r64x8)).map(GlobalManipulator::into_key).unwrap_rich(&builder.ctx).as_key();
+	let global_r64x2 = builder.create_global(r64x2, Some(const_r64x2)).map(into_key).unwrap_rich(builder.ctx);
+	let global_r64x4 = builder.create_global(r64x4, Some(const_r64x4)).map(into_key).unwrap_rich(builder.ctx);
+	let global_r64x8 = builder.create_global(r64x8, Some(const_r64x8)).map(into_key).unwrap_rich(builder.ctx);
 
 	// let ir_src = std::fs::File::create(ir_path).unwrap();
 	println!("{}", PrinterState::new(&builder.ctx).print_self());
@@ -357,7 +358,7 @@ fn structures () {
 		});
 
 
-		let PartialResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
+		let BuilderResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
 
 		let printer = PrinterState::new(&builder.ctx).with_error(error);
 
@@ -412,7 +413,7 @@ fn structures () {
 		});
 
 
-		let PartialResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
+		let BuilderResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
 
 		let printer = PrinterState::new(&builder.ctx).with_error(error);
 

@@ -1,14 +1,12 @@
-use std::{
-	fmt,
-	cell::{ Ref, RefCell },
-	hint::unreachable_unchecked,
-};
+use std::{cell::{Ref, RefCell, RefMut}, fmt, hint::unreachable_unchecked};
 
 use support::{
-	utils::{ flip_ref_opt_to_opt_ref, index_of },
-	slotmap::{ Key, Keyable, Keyed, AsKey, SlotmapCollapsePredictor },
+	utils::{ index_of },
+	slotmap::{ Key, Keyable, Keyed, AsKey, Slotmap },
 };
 
+
+use crate::ir::Meta;
 
 use super::{
 	builder::{
@@ -22,8 +20,6 @@ use super::{
 	ir::{
 		GlobalKey,
 		Context,
-		FunctionCollapsePredictor,
-		MetaCollapsePredictor,
 		FunctionKey,
 		LocalMetaKey,
 		ParamMetaKey,
@@ -36,7 +32,6 @@ use super::{
 		ConstantAggregateData,
 		GlobalMetaKey,
 		Block,
-		ContextCollapsePredictor,
 		FunctionMetaKey,
 		Constant,
 		Function,
@@ -61,23 +56,23 @@ use super::{
 
 
 
-#[derive(Debug)]
-pub struct PrinterState<'ctx> {
-	ctx: ContextCollapsePredictor<'ctx>,
-	function: RefCell<Option<FunctionCollapsePredictor<'ctx>>>,
-	err_data: Option<IrErrData>,
-	err_location: IrErrLocation,
-	indent: RefCell<usize>,
+#[derive(Debug, Clone, Copy)]
+pub struct PrinterState<'c> {
+	pub ctx: &'c Context,
+	pub function: Option<Keyed<'c, Function>>,
+	pub err_data: Option<IrErrData>,
+	pub err_location: IrErrLocation,
+	pub indent: usize,
 }
 
-impl<'ctx> PrinterState<'ctx> {
-	pub fn new (ctx: &'ctx Context) -> Self {
+impl<'c> PrinterState<'c> {
+	pub fn new (ctx: &'c Context) -> Self {
 		Self {
-			ctx: ctx.predict_collapse(),
-			function: RefCell::new(None),
+			ctx,
+			function: None,
 			err_data: None,
 			err_location: IrErrLocation::None,
-			indent: RefCell::new(0)
+			indent: 0
 		}
 	}
 
@@ -125,32 +120,32 @@ impl<'ctx> PrinterState<'ctx> {
 		self.err_location = IrErrLocation::None;
 	}
 
-	pub fn print_global (&'ctx self, global: GlobalKey) -> GlobalPrinter<'ctx, 'ctx> {
-		self.ctx.globals.get_value_keyed(global).unwrap().printer(self)
+	pub fn print_global (&self, global: GlobalKey) -> GlobalPrinter<'c, 'c> {
+		GlobalPrinter(self.ctx.globals.get_keyed(global).unwrap(), RefCell::new(*self))
 	}
 
-	pub fn print_function (&'ctx self, function: FunctionKey) -> FunctionPrinter<'ctx, 'ctx> {
-		self.ctx.functions.get_value_keyed(function).unwrap().printer(self)
+	pub fn print_function (&self, function: FunctionKey) -> FunctionPrinter<'c, 'c> {
+		FunctionPrinter(self.ctx.functions.get_keyed(function).unwrap(), RefCell::new(*self))
 	}
 
-	pub fn print_ty (&'ctx self, ty: TyKey) -> TyPrinter<'ctx, 'ctx> {
-		self.ctx.tys.get_value_keyed(ty).unwrap().printer(self)
+	pub fn print_ty (&self, ty: TyKey) -> TyPrinter<'c, 'c> {
+		TyPrinter(self.ctx.tys.get_keyed(ty).unwrap(), RefCell::new(*self))
 	}
 
-	pub fn print_self (&'ctx self) -> ContextPrinter<'ctx, 'ctx> {
-		self.ctx.printer(self)
+	pub fn print_self (&self) -> ContextPrinter<'c> {
+		ContextPrinter(RefCell::new(*self))
 	}
 
 	pub fn indent (&self) -> Indent {
-		Indent(*self.indent.borrow())
+		Indent(self.indent)
 	}
 
-	pub fn incr_indent (&self) {
-		*self.indent.borrow_mut() += 1;
+	pub fn incr_indent (&mut self) {
+		self.indent += 1;
 	}
 
-	pub fn decr_indent (&self) {
-		*self.indent.borrow_mut() -= 1;
+	pub fn decr_indent (&mut self) {
+		self.indent -= 1;
 	}
 }
 
@@ -167,28 +162,30 @@ pub trait Printer<'data, 'ctx>: fmt::Display {
 	type Data: ?Sized;
 
 	fn data (&self) -> Self::Data;
-	fn state (&self) -> &'ctx PrinterState<'ctx>;
-	fn ctx (&self) -> &'ctx ContextCollapsePredictor<'ctx> { &self.state().ctx }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>>;
+	fn state_copy (&self) -> PrinterState<'ctx> { *self.state() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>>;
+	fn ctx (&self) -> &'ctx Context { &self.state().ctx }
 
 	fn indent (&self) -> Indent { self.state().indent() }
-	fn incr_indent (&self) { self.state().incr_indent() }
-	fn decr_indent (&self) { self.state().decr_indent() }
+	fn incr_indent (&self) { self.state_mut().incr_indent() }
+	fn decr_indent (&self) { self.state_mut().decr_indent() }
 
 	fn set_function (&self, function_key: FunctionKey) {
-		let fpred = self.ctx().function_predictor(function_key).unwrap();
-		self.state().function.borrow_mut().replace(fpred);
+		let f = self.ctx().functions.get_keyed(function_key).unwrap();
+		self.state_mut().function.replace(f);
 	}
 
 	fn clear_function (&self) {
-		self.state().function.borrow_mut().take();
+		self.state_mut().function.take();
 	}
 
-	fn get_function (&self) -> Ref<FunctionCollapsePredictor<'ctx>> {
-		flip_ref_opt_to_opt_ref(self.state().function.borrow()).unwrap()
+	fn get_function (&self) -> Keyed<'ctx, Function> {
+		self.state().function.unwrap()
 	}
 
-	fn child<P: Printable<'data, 'ctx>> (&self, c: P) -> P::Printer {
-		c.printer(self.state())
+	fn child<P: Printable<'data, 'ctx>> (&self, data: P) -> P::Printer {
+		P::create_printer(data, self.state_copy())
 	}
 
 	fn pair<K, V> (&self, p: &'data (K, V)) -> PairPrinter<'data, 'ctx, K, V>
@@ -196,13 +193,13 @@ pub trait Printer<'data, 'ctx>: fmt::Display {
 		&'data K: Printable<'data, 'ctx>,
 		&'data V: Printable<'data, 'ctx>,
 	{
-		PairPrinter(p, self.state())
+		PairPrinter(p, RefCell::new(self.state_copy()))
 	}
 
 	fn list<P> (&self, l: &'data [P]) -> ListPrinter<'data, 'ctx, P>
 	where &'data P: Printable<'data, 'ctx>
 	{
-		ListPrinter(l, self.state())
+		ListPrinter(l, RefCell::new(self.state_copy()))
 	}
 
 	fn pair_list<K, V> (&self, l: &'data [(K, V)]) -> PairListPrinter<'data, 'ctx, K, V>
@@ -210,19 +207,19 @@ pub trait Printer<'data, 'ctx>: fmt::Display {
 		&'data K: Printable<'data, 'ctx>,
 		&'data V: Printable<'data, 'ctx>,
 	{
-		PairListPrinter(l, self.state())
+		PairListPrinter(l, RefCell::new(self.state_copy()))
 	}
 }
 
 pub trait Printable<'data, 'ctx> {
-	type Printer: fmt::Display;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer;
+	type Printer: Printer<'data, 'ctx>;
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer;
 }
 
 
 
 
-pub struct ListPrinter<'data, 'ctx, P: 'data> (&'data [P], &'ctx PrinterState<'ctx>)
+pub struct ListPrinter<'data, 'ctx, P: 'data> (&'data [P], RefCell<PrinterState<'ctx>>)
 where &'data P: Printable<'data, 'ctx>;
 
 impl<'data, 'ctx, P: 'data> Printer<'data, 'ctx> for ListPrinter<'data, 'ctx, P>
@@ -231,11 +228,12 @@ where &'data P: Printable<'data, 'ctx>
 	type Data = &'data [P];
 
 	fn data (&self) -> &'data [P] { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx, P: 'data> fmt::Display for ListPrinter<'data, 'ctx, P>
-where &'data P: Printable<'data, 'ctx>
+where &'data P: Printable<'data, 'ctx>,
 {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		if !self.0.is_empty() {
@@ -243,7 +241,7 @@ where &'data P: Printable<'data, 'ctx>
 			self.incr_indent();
 
 			for e in self.0.iter() {
-				writeln!(f, "{}{}", self.indent(), self.child(e))?;
+				writeln!(f, "{}{}", self.indent(), self.child::<&'data P>(e))?;
 			}
 
 			self.decr_indent();
@@ -260,11 +258,11 @@ where &'data P: Printable<'data, 'ctx>
 // where &'data P: Printable<'data, 'ctx>
 // {
 // 	type Printer = ListPrinter<'data, 'ctx, P>;
-// 	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ListPrinter(self, state) }
+// 	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { ListPrinter::<'data,'ctx>(data, RefCell::new(state)) }
 // }
 
 
-pub struct PairListPrinter<'data, 'ctx, K, V> (&'data [(K, V)], &'ctx PrinterState<'ctx>)
+pub struct PairListPrinter<'data, 'ctx, K, V> (&'data [(K, V)], RefCell<PrinterState<'ctx>>)
 where
 	&'data K: Printable<'data, 'ctx>,
 	&'data V: Printable<'data, 'ctx>,
@@ -278,7 +276,8 @@ where
 	type Data = &'data [(K, V)];
 
 	fn data (&self) -> &'data [(K, V)] { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx, K, V> fmt::Display for PairListPrinter<'data, 'ctx, K, V>
@@ -303,12 +302,13 @@ where
 
 
 
-pub struct DPrinter<'data, 'ctx, D: ?Sized + fmt::Display> (&'data D, &'ctx PrinterState<'ctx>);
+pub struct DPrinter<'data, 'ctx, D: ?Sized + fmt::Display> (&'data D, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx, D: ?Sized + fmt::Display> Printer<'data, 'ctx> for DPrinter<'data, 'ctx, D> {
 	type Data = &'data D;
 
 	fn data (&self) -> &'data D { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx, D: ?Sized + fmt::Display> fmt::Display for DPrinter<'data, 'ctx, D> {
@@ -317,9 +317,12 @@ impl<'data, 'ctx, D: ?Sized + fmt::Display> fmt::Display for DPrinter<'data, 'ct
 	}
 }
 
-// impl<'data, 'ctx, D: 'data + Display> Printable<'data, 'ctx> for D {
+// impl<'data, 'ctx, D: 'data + fmt::Display> Printable<'data, 'ctx> for D {
 // 	type Printer = DPrinter<'data, 'ctx, D>;
-// 	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { DPrinter(self, state) }
+
+//
+
+// 	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { Self::eate_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { Self::::Printer(data, RefCell::new(state)) ) }
 // }
 
 macro_rules! impl_dprinter {
@@ -327,7 +330,7 @@ macro_rules! impl_dprinter {
 		$(
 			impl<'data, 'ctx> Printable<'data, 'ctx> for &'data $ty {
 				type Printer = DPrinter<'data, 'ctx, $ty>;
-				fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { DPrinter(self, state) }
+				fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { DPrinter::<'data, 'ctx, $ty>(data, RefCell::new(state)) }
 			}
 		)+
 	};
@@ -342,7 +345,7 @@ impl_dprinter! {
 }
 
 
-pub struct PairPrinter<'data, 'ctx, K: 'data, V: 'data> (&'data (K, V), &'ctx PrinterState<'ctx>)
+pub struct PairPrinter<'data, 'ctx, K: 'data, V: 'data> (&'data (K, V), RefCell<PrinterState<'ctx>>)
 where
 	&'data K: Printable<'data, 'ctx>,
 	&'data V: Printable<'data, 'ctx>,
@@ -356,7 +359,8 @@ where
 	type Data = &'data (K, V);
 
 	fn data (&self) -> &'data (K, V) { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx, K: 'data, V: 'data> fmt::Display for PairPrinter<'data, 'ctx, K, V>
@@ -375,17 +379,18 @@ where
 
 
 
-pub struct TyKeyPrinter<'data, 'ctx> (&'data TyKey, &'ctx PrinterState<'ctx>);
+pub struct TyKeyPrinter<'data, 'ctx> (&'data TyKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for TyKeyPrinter<'data, 'ctx> {
 	type Data = &'data TyKey;
 
 	fn data (&self) -> &'data TyKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for TyKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if let Some(ty) = self.ctx().tys.get_value(*self.0) {
+		if let Some(ty) = self.ctx().tys.get(*self.0) {
 			if let Some(intrinsic) = ty.get_pure_intrinsic_name() {
 				return write!(f, "(ty {})", intrinsic)
 			}
@@ -406,23 +411,24 @@ impl<'data, 'ctx> fmt::Display for TyKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data TyKey {
 	type Printer = TyKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { TyKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct GlobalKeyPrinter<'data, 'ctx> (&'data GlobalKey, &'ctx PrinterState<'ctx>);
+pub struct GlobalKeyPrinter<'data, 'ctx> (&'data GlobalKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for GlobalKeyPrinter<'data, 'ctx> {
 	type Data = &'data GlobalKey;
 
 	fn data (&self) -> &'data GlobalKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for GlobalKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if let Some(glo) = self.ctx().globals.get_value(*self.data()) {
+		if let Some(glo) = self.ctx().globals.get(*self.data()) {
 			if let Some(name) = glo.name.as_ref() {
 				write!(f, "(global \"{}\")", name)
 			} else if let Some(index) = self.ctx().globals.get_index(*self.data()) {
@@ -439,23 +445,24 @@ impl<'data, 'ctx> fmt::Display for GlobalKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data GlobalKey {
 	type Printer = GlobalKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { GlobalKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { GlobalKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct FunctionKeyPrinter<'data, 'ctx> (&'data FunctionKey, &'ctx PrinterState<'ctx>);
+pub struct FunctionKeyPrinter<'data, 'ctx> (&'data FunctionKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for FunctionKeyPrinter<'data, 'ctx> {
 	type Data = &'data FunctionKey;
 
 	fn data (&self) -> &'data FunctionKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for FunctionKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if let Some(func) = self.ctx().functions.get_value(*self.0) {
+		if let Some(func) = self.ctx().functions.get(*self.0) {
 			if let Some(name) = func.name.as_ref() {
 				write!(f, "(function \"{}\")", name)
 			} else if let Some(index) = self.ctx().functions.get_index(*self.data()) {
@@ -472,19 +479,20 @@ impl<'data, 'ctx> fmt::Display for FunctionKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data FunctionKey {
 	type Printer = FunctionKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { FunctionKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { FunctionKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
 
-pub struct BlockKeyPrinter<'data, 'ctx> (&'data BlockKey, &'ctx PrinterState<'ctx>);
+pub struct BlockKeyPrinter<'data, 'ctx> (&'data BlockKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for BlockKeyPrinter<'data, 'ctx> {
 	type Data = &'data BlockKey;
 
 	fn data (&self) -> &'data BlockKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for BlockKeyPrinter<'data, 'ctx> {
@@ -505,18 +513,19 @@ impl<'data, 'ctx> fmt::Display for BlockKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data BlockKey {
 	type Printer = BlockKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { BlockKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { BlockKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct ParamKeyPrinter<'data, 'ctx> (&'data ParamKey, &'ctx PrinterState<'ctx>);
+pub struct ParamKeyPrinter<'data, 'ctx> (&'data ParamKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for ParamKeyPrinter<'data, 'ctx> {
 	type Data = &'data ParamKey;
 
 	fn data (&self) -> &'data ParamKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for ParamKeyPrinter<'data, 'ctx> {
@@ -537,25 +546,26 @@ impl<'data, 'ctx> fmt::Display for ParamKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data ParamKey {
 	type Printer = ParamKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ParamKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { ParamKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct LocalKeyPrinter<'data, 'ctx> (&'data LocalKey, &'ctx PrinterState<'ctx>);
+pub struct LocalKeyPrinter<'data, 'ctx> (&'data LocalKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for LocalKeyPrinter<'data, 'ctx> {
 	type Data = &'data LocalKey;
 
 	fn data (&self) -> &'data LocalKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for LocalKeyPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		let func = self.get_function();
 
-		if let Some(local) = func.locals.get_value(*self.0) {
+		if let Some(local) = func.locals.get(*self.0) {
 			if let Some(name) = local.name.as_ref() {
 				write!(f, "(local \"{}\")", name)
 			} else if let Some(index) = func.locals.get_index(*self.0) {
@@ -572,24 +582,25 @@ impl<'data, 'ctx> fmt::Display for LocalKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data LocalKey {
 	type Printer = LocalKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { LocalKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { LocalKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct SrcAttributionPrinter<'data, 'ctx> (&'data SrcAttribution, &'ctx PrinterState<'ctx>);
+pub struct SrcAttributionPrinter<'data, 'ctx> (&'data SrcAttribution, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for SrcAttributionPrinter<'data, 'ctx> {
 	type Data = &'data SrcAttribution;
 
 	fn data (&self) -> &'data SrcAttribution { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for SrcAttributionPrinter<'data, 'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, ":src (", )?;
 
-		if let Some(src) = self.ctx().srcs.get_value(self.0.key) {
+		if let Some(src) = self.ctx().srcs.get(self.0.key) {
 			write!(f, "{}", src.path.display())?;
 		} else if let Some(idx) = self.ctx().srcs.get_index(self.0.key) {
 			write!(f, "{}", idx)?;
@@ -598,7 +609,7 @@ impl<'data, 'ctx> fmt::Display for SrcAttributionPrinter<'data, 'ctx> {
 		}
 
 		if let Some(range) = self.0.range {
-			if let Some(src) = self.ctx().srcs.get_value(self.0.key) {
+			if let Some(src) = self.ctx().srcs.get(self.0.key) {
 				let (line, col) = src.get_line_col(range.0);
 				write!(f, ":{}:{}", line, col)?;
 
@@ -613,17 +624,18 @@ impl<'data, 'ctx> fmt::Display for SrcAttributionPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data SrcAttribution {
 	type Printer = SrcAttributionPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { SrcAttributionPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { SrcAttributionPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct ParamMetaKeyPrinter<'data, 'ctx> (&'data ParamMetaKey, &'ctx PrinterState<'ctx>);
+pub struct ParamMetaKeyPrinter<'data, 'ctx> (&'data ParamMetaKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for ParamMetaKeyPrinter<'data, 'ctx> {
 	type Data = &'data ParamMetaKey;
 
 	fn data (&self) -> &'data ParamMetaKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for ParamMetaKeyPrinter<'data, 'ctx> {
@@ -640,17 +652,18 @@ impl<'data, 'ctx> fmt::Display for ParamMetaKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data ParamMetaKey {
 	type Printer = ParamMetaKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ParamMetaKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { ParamMetaKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct LocalMetaKeyPrinter<'data, 'ctx> (&'data LocalMetaKey, &'ctx PrinterState<'ctx>);
+pub struct LocalMetaKeyPrinter<'data, 'ctx> (&'data LocalMetaKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for LocalMetaKeyPrinter<'data, 'ctx> {
 	type Data = &'data LocalMetaKey;
 
 	fn data (&self) -> &'data LocalMetaKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for LocalMetaKeyPrinter<'data, 'ctx> {
@@ -667,17 +680,18 @@ impl<'data, 'ctx> fmt::Display for LocalMetaKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data LocalMetaKey {
 	type Printer = LocalMetaKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { LocalMetaKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { LocalMetaKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct IrMetaKeyPrinter<'data, 'ctx> (&'data IrMetaKey, &'ctx PrinterState<'ctx>);
+pub struct IrMetaKeyPrinter<'data, 'ctx> (&'data IrMetaKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for IrMetaKeyPrinter<'data, 'ctx> {
 	type Data = &'data IrMetaKey;
 
 	fn data (&self) -> &'data IrMetaKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for IrMetaKeyPrinter<'data, 'ctx> {
@@ -694,17 +708,18 @@ impl<'data, 'ctx> fmt::Display for IrMetaKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data IrMetaKey {
 	type Printer = IrMetaKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { IrMetaKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { IrMetaKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct TyMetaKeyPrinter<'data, 'ctx> (&'data TyMetaKey, &'ctx PrinterState<'ctx>);
+pub struct TyMetaKeyPrinter<'data, 'ctx> (&'data TyMetaKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for TyMetaKeyPrinter<'data, 'ctx> {
 	type Data = &'data TyMetaKey;
 
 	fn data (&self) -> &'data TyMetaKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for TyMetaKeyPrinter<'data, 'ctx> {
@@ -721,17 +736,18 @@ impl<'data, 'ctx> fmt::Display for TyMetaKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data TyMetaKey {
 	type Printer = TyMetaKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyMetaKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { TyMetaKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct FunctionMetaKeyPrinter<'data, 'ctx> (&'data FunctionMetaKey, &'ctx PrinterState<'ctx>);
+pub struct FunctionMetaKeyPrinter<'data, 'ctx> (&'data FunctionMetaKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for FunctionMetaKeyPrinter<'data, 'ctx> {
 	type Data = &'data FunctionMetaKey;
 
 	fn data (&self) -> &'data FunctionMetaKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for FunctionMetaKeyPrinter<'data, 'ctx> {
@@ -748,17 +764,18 @@ impl<'data, 'ctx> fmt::Display for FunctionMetaKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data FunctionMetaKey {
 	type Printer = FunctionMetaKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { FunctionMetaKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { FunctionMetaKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct GlobalMetaKeyPrinter<'data, 'ctx> (&'data GlobalMetaKey, &'ctx PrinterState<'ctx>);
+pub struct GlobalMetaKeyPrinter<'data, 'ctx> (&'data GlobalMetaKey, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for GlobalMetaKeyPrinter<'data, 'ctx> {
 	type Data = &'data GlobalMetaKey;
 
 	fn data (&self) -> &'data GlobalMetaKey { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for GlobalMetaKeyPrinter<'data, 'ctx> {
@@ -775,19 +792,20 @@ impl<'data, 'ctx> fmt::Display for GlobalMetaKeyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data GlobalMetaKey {
 	type Printer = GlobalMetaKeyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { GlobalMetaKeyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { GlobalMetaKeyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
 
-pub struct TyPrinter<'data, 'ctx> (Keyed<'data, Ty>, &'ctx PrinterState<'ctx>);
+pub struct TyPrinter<'data, 'ctx> (Keyed<'data, Ty>, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for TyPrinter<'data, 'ctx> {
 	type Data = Keyed<'data, Ty>;
 
 	fn data (&self) -> Keyed<'data, Ty> { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
@@ -852,7 +870,7 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 
 
 		if matches!(self.state().err_location, IrErrLocation::Ty(key) if key == self.0.as_key()) {
-			writeln!(f, "\n{}", self.child(self.state().err_data.as_ref()))?;
+			writeln!(f, "\n{}", self.child(self.state().err_data))?;
 		}
 
 		Ok(())
@@ -861,19 +879,20 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Ty> {
 	type Printer = TyPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { TyPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
 
-pub struct ConstantPrinter<'data, 'ctx> (&'data Constant, &'ctx PrinterState<'ctx>);
+pub struct ConstantPrinter<'data, 'ctx> (&'data Constant, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for ConstantPrinter<'data, 'ctx> {
 	type Data = &'data Constant;
 
 	fn data (&self) -> &'data Constant { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for ConstantPrinter<'data, 'ctx> {
@@ -906,19 +925,20 @@ impl<'data, 'ctx> fmt::Display for ConstantPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data Constant {
 	type Printer = ConstantPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ConstantPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { ConstantPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
 
-pub struct ConstantAggregateDataPrinter<'data, 'ctx> (&'data ConstantAggregateData, &'ctx PrinterState<'ctx>);
+pub struct ConstantAggregateDataPrinter<'data, 'ctx> (&'data ConstantAggregateData, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for ConstantAggregateDataPrinter<'data, 'ctx> {
 	type Data = &'data ConstantAggregateData;
 
 	fn data (&self) -> &'data ConstantAggregateData { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for ConstantAggregateDataPrinter<'data, 'ctx> {
@@ -935,19 +955,20 @@ impl<'data, 'ctx> fmt::Display for ConstantAggregateDataPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data ConstantAggregateData {
 	type Printer = ConstantAggregateDataPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ConstantAggregateDataPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { ConstantAggregateDataPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
 
-pub struct AggregateDataPrinter<'data, 'ctx> (&'data AggregateData, &'ctx PrinterState<'ctx>);
+pub struct AggregateDataPrinter<'data, 'ctx> (&'data AggregateData, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for AggregateDataPrinter<'data, 'ctx> {
 	type Data = &'data AggregateData;
 
 	fn data (&self) -> &'data AggregateData { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for AggregateDataPrinter<'data, 'ctx> {
@@ -966,19 +987,20 @@ impl<'data, 'ctx> fmt::Display for AggregateDataPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data AggregateData {
 	type Printer = AggregateDataPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { AggregateDataPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { AggregateDataPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
 
-pub struct IrDataPrinter<'data, 'ctx> (&'data IrData, &'ctx PrinterState<'ctx>);
+pub struct IrDataPrinter<'data, 'ctx> (&'data IrData, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for IrDataPrinter<'data, 'ctx> {
 	type Data = &'data IrData;
 
 	fn data (&self) -> &'data IrData { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for IrDataPrinter<'data, 'ctx> {
@@ -1023,17 +1045,18 @@ impl<'data, 'ctx> fmt::Display for IrDataPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data IrData {
 	type Printer = IrDataPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { IrDataPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { IrDataPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct IrPrinter<'data, 'ctx> (&'data Ir, &'ctx PrinterState<'ctx>);
+pub struct IrPrinter<'data, 'ctx> (&'data Ir, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for IrPrinter<'data, 'ctx> {
 	type Data = &'data Ir;
 
 	fn data (&self) -> &'data Ir { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for IrPrinter<'data, 'ctx> {
@@ -1058,20 +1081,21 @@ impl<'data, 'ctx> fmt::Display for IrPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data Ir {
 	type Printer = IrPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { IrPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { IrPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
-pub struct PossibleErrorPrinter<'data, 'ctx> (Option<&'data IrErrData>, &'ctx PrinterState<'ctx>);
-impl<'data, 'ctx> Printer<'data, 'ctx> for PossibleErrorPrinter<'data, 'ctx> {
-	type Data = Option<&'data IrErrData>;
+pub struct PossibleErrorPrinter<'ctx> (Option<IrErrData>, RefCell<PrinterState<'ctx>>);
+impl<'ctx> Printer<'_, 'ctx> for PossibleErrorPrinter<'ctx> {
+	type Data = Option<IrErrData>;
 
-	fn data (&self) -> Option<&'data IrErrData> { self.0 }
-	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn data (&self) -> Option<IrErrData> { self.0 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
-impl<'data, 'ctx> fmt::Display for PossibleErrorPrinter<'data, 'ctx> {
+impl<'ctx> fmt::Display for PossibleErrorPrinter<'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "^ Error")?;
 
@@ -1083,25 +1107,26 @@ impl<'data, 'ctx> fmt::Display for PossibleErrorPrinter<'data, 'ctx> {
 	}
 }
 
-impl<'data, 'ctx> Printable<'data, 'ctx> for Option<&'data IrErrData> {
-	type Printer = PossibleErrorPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { PossibleErrorPrinter(self, state) }
+impl<'ctx> Printable<'_, 'ctx> for Option<IrErrData> {
+	type Printer = PossibleErrorPrinter<'ctx>;
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { PossibleErrorPrinter::<'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct IrErrorPrinter<'data, 'ctx> (&'data IrErrData, &'ctx PrinterState<'ctx>);
-impl<'data, 'ctx> Printer<'data, 'ctx> for IrErrorPrinter<'data, 'ctx> {
-	type Data = &'data IrErrData;
+pub struct IrErrorPrinter<'ctx> (IrErrData, RefCell<PrinterState<'ctx>>);
+impl<'ctx> Printer<'_, 'ctx> for IrErrorPrinter<'ctx> {
+	type Data = IrErrData;
 
-	fn data (&self) -> &'data IrErrData { self.0 }
-	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn data (&self) -> IrErrData { self.0 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
-impl<'data, 'ctx> fmt::Display for IrErrorPrinter<'data, 'ctx> {
+impl<'ctx> fmt::Display for IrErrorPrinter<'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self.data() {
+		match &self.data() {
 			IrErrData::EmptyBlock(block_key) => { write!(f, "Block {} contains no instructions", self.child(block_key)) }
 			IrErrData::InvalidParamKey(param_key) => { write!(f, "Invalid param key {}", self.child(param_key)) }
 			IrErrData::InvalidParamIndex(param_idx) => { write!(f, "Invalid param index {}", param_idx) }
@@ -1118,18 +1143,19 @@ impl<'data, 'ctx> fmt::Display for IrErrorPrinter<'data, 'ctx> {
 	}
 }
 
-impl<'data, 'ctx> Printable<'data, 'ctx> for &'data IrErrData {
-	type Printer = IrErrorPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { IrErrorPrinter(self, state) }
+impl<'ctx> Printable<'_, 'ctx> for IrErrData {
+	type Printer = IrErrorPrinter<'ctx>;
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { IrErrorPrinter::<'ctx>(data, RefCell::new(state)) }
 }
 
 
-pub struct CfgErrorPrinter<'data, 'ctx> (&'data CfgErr, &'ctx PrinterState<'ctx>);
+pub struct CfgErrorPrinter<'data, 'ctx> (&'data CfgErr, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for CfgErrorPrinter<'data, 'ctx> {
 	type Data = &'data CfgErr;
 
 	fn data (&self) -> &'data CfgErr { self.0 }
-	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for CfgErrorPrinter<'data, 'ctx> {
@@ -1149,18 +1175,19 @@ impl<'data, 'ctx> fmt::Display for CfgErrorPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data CfgErr {
 	type Printer = CfgErrorPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { CfgErrorPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { CfgErrorPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct TyErrPrinter<'data, 'ctx> (&'data TyErr, &'ctx PrinterState<'ctx>);
+pub struct TyErrPrinter<'data, 'ctx> (&'data TyErr, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for TyErrPrinter<'data, 'ctx> {
 	type Data = &'data TyErr;
 
 	fn data (&self) -> &'data TyErr { self.0 }
-	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for TyErrPrinter<'data, 'ctx> {
@@ -1204,18 +1231,19 @@ impl<'data, 'ctx> fmt::Display for TyErrPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for &'data TyErr {
 	type Printer = TyErrPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { TyErrPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { TyErrPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct BlockPrinter<'data, 'ctx> (Keyed<'data, Block>, &'ctx PrinterState<'ctx>);
+pub struct BlockPrinter<'data, 'ctx> (Keyed<'data, Block>, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for BlockPrinter<'data, 'ctx> {
 	type Data = Keyed<'data, Block>;
 
 	fn data (&self) -> Keyed<'data, Block> { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for BlockPrinter<'data, 'ctx> {
@@ -1234,14 +1262,14 @@ impl<'data, 'ctx> fmt::Display for BlockPrinter<'data, 'ctx> {
 
 			match self.state().err_location {
 				IrErrLocation::Function(err_function_key, FunctionErrLocation::Node(err_block_key, err_node_idx))
-				if err_function_key == self.get_function().own_key
+				if err_function_key == self.get_function().as_key()
 				&& err_block_key == self.data().as_key()
 				=> {
 					for (i, node) in self.0.ir.iter().enumerate() {
 						writeln!(f, "{}{}", self.indent(), self.child(node))?;
 
 						if i == err_node_idx {
-							writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data.as_ref()))?;
+							writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data))?;
 						}
 					}
 				}
@@ -1265,18 +1293,19 @@ impl<'data, 'ctx> fmt::Display for BlockPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Block> {
 	type Printer = BlockPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { BlockPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { BlockPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
 
 
-pub struct FunctionPrinter<'data, 'ctx> (Keyed<'data, Function>, &'ctx PrinterState<'ctx>);
+pub struct FunctionPrinter<'data, 'ctx> (Keyed<'data, Function>, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for FunctionPrinter<'data, 'ctx> {
 	type Data = Keyed<'data, Function>;
 
 	fn data (&self) -> Keyed<'data, Function> { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
@@ -1285,7 +1314,7 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 
 		write!(f, "(function")?;
 
-		write!(f, " :id {}", self.get_function().own_index)?;
+		write!(f, " :id {}", self.get_function().as_key().as_integer())?;
 
 		if let Some(name) = self.0.name.as_ref() {
 			write!(f, " :name \"{}\"", name)?;
@@ -1403,7 +1432,7 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 					if err_function_key == self.data().as_key()
 					&& err_block_key == block.as_key()
 					=> {
-						writeln!(f, "\t\t{}", self.child(self.state().err_data.as_ref()))?;
+						writeln!(f, "\t\t{}", self.child(self.state().err_data))?;
 					}
 
 					_ => { }
@@ -1422,7 +1451,7 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 			IrErrLocation::Function(err_function_key, FunctionErrLocation::Root)
 			if err_function_key == self.data().as_key()
 	 	) {
-			writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data.as_ref()))?;
+			writeln!(f, "{}{}", self.indent(), self.child(self.state().err_data))?;
 		}
 
 
@@ -1434,19 +1463,20 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Function> {
 	type Printer = FunctionPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { FunctionPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { FunctionPrinter(data, RefCell::new(state)) }
 }
 
 
 
 
 
-pub struct GlobalPrinter<'data, 'ctx> (Keyed<'data, Global>, &'ctx PrinterState<'ctx>);
+pub struct GlobalPrinter<'data, 'ctx> (Keyed<'data, Global>, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for GlobalPrinter<'data, 'ctx> {
 	type Data = Keyed<'data, Global>;
 
 	fn data (&self) -> Keyed<'data, Global> { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for GlobalPrinter<'data, 'ctx> {
@@ -1479,7 +1509,7 @@ impl<'data, 'ctx> fmt::Display for GlobalPrinter<'data, 'ctx> {
 		write!(f, "))")?;
 
 		if matches!(self.state().err_location, IrErrLocation::Global(key) if key == self.0.as_key()) {
-			writeln!(f, "\n{}", self.child(self.state().err_data.as_ref()))?;
+			writeln!(f, "\n{}", self.child(self.state().err_data))?;
 		}
 
 
@@ -1489,7 +1519,7 @@ impl<'data, 'ctx> fmt::Display for GlobalPrinter<'data, 'ctx> {
 
 impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Global> {
 	type Printer = GlobalPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { GlobalPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { GlobalPrinter(data, RefCell::new(state)) }
 }
 
 
@@ -1497,12 +1527,13 @@ impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, Global> {
 macro_rules! meta_printers {
 	($($tyname:ident($field:ident)),+ $(,)?) => { $(
 		support::paste! {
-			pub struct [<$tyname Printer>]<'data, 'ctx> (Keyed<'data, $tyname>, &'ctx PrinterState<'ctx>);
+			pub struct [<$tyname Printer>]<'data, 'ctx> (Keyed<'data, $tyname>, RefCell<PrinterState<'ctx>>);
 			impl<'data, 'ctx> Printer<'data, 'ctx> for [<$tyname Printer>]<'data, 'ctx> {
 				type Data = Keyed<'data, $tyname>;
 
 				fn data (&self) -> Keyed<'data, $tyname> { self.0 }
-				fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+				fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+				fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 			}
 
 			impl<'data, 'ctx> fmt::Display for [<$tyname Printer>]<'data, 'ctx> {
@@ -1513,7 +1544,7 @@ macro_rules! meta_printers {
 
 			impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, $tyname> {
 				type Printer = [<$tyname Printer>]<'data, 'ctx>;
-				fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { [<$tyname Printer>](self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { [< $tyname Printer >]::<'data, 'ctx>(data, RefCell::new(state)) }
 			}
 		}
 	)+ };
@@ -1530,7 +1561,7 @@ meta_printers! {
 
 
 
-pub struct SlotmapPrinter<'data, 'ctx, K: 'data + Key, V: 'data + Keyable<Key = K>> (&'data SlotmapCollapsePredictor<'data, K, V>, &'ctx PrinterState<'ctx>)
+pub struct SlotmapPrinter<'data, 'ctx, K: 'data + Key, V: 'data + Keyable<Key = K>> (&'data Slotmap<K, V>, RefCell<PrinterState<'ctx>>)
 where
 	Keyed<'data, V>: Printable<'data,'ctx>,
 ;
@@ -1539,10 +1570,11 @@ impl<'data, 'ctx, K: 'data + Key, V: 'data + Keyable<Key = K>> Printer<'data, 'c
 where
 	Keyed<'data, V>: Printable<'data,'ctx>,
 {
-	type Data = &'data SlotmapCollapsePredictor<'data, K, V>;
+	type Data = &'data Slotmap<K, V>;
 
 	fn data (&self) -> Self::Data { self.0 }
-	fn state (&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx, K: 'data + Key, V: 'data + Keyable<Key = K>> fmt::Display for SlotmapPrinter<'data, 'ctx, K, V>
@@ -1554,8 +1586,8 @@ where
 			writeln!(f)?;
 			self.incr_indent();
 
-			for &key in self.0.iter() {
-				writeln!(f, "{}{}", self.indent(), self.child(self.0.get_value_keyed(key).unwrap()))?;
+			for (&key, value) in self.0.iter() {
+				writeln!(f, "{}{}", self.indent(), self.child(Keyed::new(key, value)))?;
 			}
 
 			self.decr_indent();
@@ -1573,12 +1605,13 @@ where
 
 
 
-pub struct MetaPrinter<'data, 'ctx> (&'data MetaCollapsePredictor<'data>, &'ctx PrinterState<'ctx>);
+pub struct MetaPrinter<'data, 'ctx> (&'data Meta, RefCell<PrinterState<'ctx>>);
 impl<'data, 'ctx> Printer<'data, 'ctx> for MetaPrinter<'data, 'ctx> {
-	type Data = &'data MetaCollapsePredictor<'data>;
+	type Data = &'data Meta;
 
-	fn data (&self) -> &'data MetaCollapsePredictor<'data> { self.0 }
-	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn data (&self) -> &'data Meta { self.0 }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.1.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.1.borrow_mut() }
 }
 
 impl<'data, 'ctx> fmt::Display for MetaPrinter<'data, 'ctx> {
@@ -1587,48 +1620,49 @@ impl<'data, 'ctx> fmt::Display for MetaPrinter<'data, 'ctx> {
 
 		self.incr_indent();
 
-		if !self.0.ty.is_empty() { writeln!(f, "{}(ty {})", self.indent(), SlotmapPrinter(&self.0.ty, self.state()))?; }
-		if !self.0.function.is_empty() { writeln!(f, "{}(function {})", self.indent(), SlotmapPrinter(&self.0.function, self.state()))?; }
-		if !self.0.param.is_empty() { writeln!(f, "{}(param {})", self.indent(), SlotmapPrinter(&self.0.param, self.state()))?; }
-		if !self.0.local.is_empty() { writeln!(f, "{}(local {})", self.indent(), SlotmapPrinter(&self.0.local, self.state()))?; }
-		if !self.0.global.is_empty() { writeln!(f, "{}(global {})", self.indent(), SlotmapPrinter(&self.0.global, self.state()))?; }
-		if !self.0.ir.is_empty() { writeln!(f, "{}(ir {})", self.indent(), SlotmapPrinter(&self.0.ir, self.state()))?; }
+		if !self.0.ty.is_empty() { writeln!(f, "{}(ty {})", self.indent(), SlotmapPrinter(&self.0.ty, RefCell::new(self.state_copy())))?; }
+		if !self.0.function.is_empty() { writeln!(f, "{}(function {})", self.indent(), SlotmapPrinter(&self.0.function, RefCell::new(self.state_copy())))?; }
+		if !self.0.param.is_empty() { writeln!(f, "{}(param {})", self.indent(), SlotmapPrinter(&self.0.param, RefCell::new(self.state_copy())))?; }
+		if !self.0.local.is_empty() { writeln!(f, "{}(local {})", self.indent(), SlotmapPrinter(&self.0.local, RefCell::new(self.state_copy())))?; }
+		if !self.0.global.is_empty() { writeln!(f, "{}(global {})", self.indent(), SlotmapPrinter(&self.0.global, RefCell::new(self.state_copy())))?; }
+		if !self.0.ir.is_empty() { writeln!(f, "{}(ir {})", self.indent(), SlotmapPrinter(&self.0.ir, RefCell::new(self.state_copy())))?; }
 
 		self.decr_indent();
 		write!(f, "{})", self.indent())
 	}
 }
 
-impl<'data, 'ctx> Printable<'data, 'ctx> for &'data MetaCollapsePredictor<'data> {
+impl<'data, 'ctx> Printable<'data, 'ctx> for &'data Meta {
 	type Printer = MetaPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { MetaPrinter(self, state) }
+	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { MetaPrinter::<'data, 'ctx>(data, RefCell::new(state)) }
 }
 
 
-pub struct ContextPrinter<'data, 'ctx> (&'data ContextCollapsePredictor<'data>, &'ctx PrinterState<'ctx>);
-impl<'data, 'ctx> Printer<'data, 'ctx> for ContextPrinter<'data, 'ctx> {
-	type Data = &'data ContextCollapsePredictor<'data>;
+pub struct ContextPrinter<'ctx> (RefCell<PrinterState<'ctx>>);
+impl<'ctx> Printer<'ctx, 'ctx> for ContextPrinter<'ctx> {
+	type Data = &'ctx Context;
 
-	fn data (&self) -> &'data ContextCollapsePredictor<'data> { self.0 }
-	fn state	(&self) -> &'ctx PrinterState<'ctx> { self.1 }
+	fn data (&self) -> &'ctx Context { self.state().ctx }
+	fn state (&self) -> Ref<'_, PrinterState<'ctx>> { self.0.borrow() }
+	fn state_mut (&self) -> RefMut<'_, PrinterState<'ctx>> { self.0.borrow_mut() }
 }
 
-impl<'data, 'ctx> fmt::Display for ContextPrinter<'data, 'ctx> {
+impl<'data, 'ctx> fmt::Display for ContextPrinter<'ctx> {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		if matches!(self.state().err_location, IrErrLocation::None) {
-			if let Some(err_data) = &self.state().err_data {
+			if let Some(err_data) = self.state().err_data {
 				writeln!(f, "Error: {}", self.child(err_data))?;
 			}
 		}
-		if !self.0.tys.is_empty() { writeln!(f, "{}(types {})", self.indent(), SlotmapPrinter(&self.0.tys, self.state()))?; }
-		if !self.0.globals.is_empty() { writeln!(f, "{}(globals {})", self.indent(), SlotmapPrinter(&self.0.globals, self.state()))?; }
-		if !self.0.functions.is_empty() { writeln!(f, "{}(functions {})", self.indent(), SlotmapPrinter(&self.0.functions, self.state()))?; }
-		if !self.0.meta.is_empty() { writeln!(f, "{}{}", self.indent(), self.child(&self.0.meta))?; }
+		if !self.data().tys.is_empty() { writeln!(f, "{}(types {})", self.indent(), SlotmapPrinter(&self.data().tys, RefCell::new(self.state_copy())))?; }
+		if !self.data().globals.is_empty() { writeln!(f, "{}(globals {})", self.indent(), SlotmapPrinter(&self.data().globals, RefCell::new(self.state_copy())))?; }
+		if !self.data().functions.is_empty() { writeln!(f, "{}(functions {})", self.indent(), SlotmapPrinter(&self.data().functions, RefCell::new(self.state_copy())))?; }
+		if !self.data().meta.is_empty() { writeln!(f, "{}{}", self.indent(), self.child(&self.data().meta))?; }
 		Ok(())
 	}
 }
 
-impl<'data, 'ctx> Printable<'data, 'ctx> for &'data ContextCollapsePredictor<'data> {
-	type Printer = ContextPrinter<'data, 'ctx>;
-	fn printer (self, state: &'ctx PrinterState<'ctx>) -> Self::Printer { ContextPrinter(self, state) }
+impl<'ctx> Printable<'ctx, 'ctx> for &'ctx Context {
+	type Printer = ContextPrinter<'ctx>;
+	fn create_printer (_: Self, state: PrinterState<'ctx>) -> Self::Printer { ContextPrinter::<'ctx>(RefCell::new(state)) }
 }

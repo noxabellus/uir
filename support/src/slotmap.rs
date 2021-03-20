@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, ops, slice, vec};
+use std::{hash::Hash, ops, slice, vec};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Copy)]
@@ -31,6 +31,12 @@ impl<K: Key> AsKey<K> for &mut K {
 }
 
 
+pub fn into_key<K: Key> (k: impl AsKey<K>) -> K {
+	k.as_key()
+}
+
+
+
 pub trait Keyable {
 	type Key: Key;
 }
@@ -54,6 +60,8 @@ impl<'a, D: Keyable> Clone for Keyed<'a, D> {
 impl<'a, D: Keyable> Copy for Keyed<'a, D> { }
 
 impl<'a, D: Keyable> Keyed<'a, D> {
+	pub fn new (key: D::Key, value: &'a D) -> Self { Self { key, value } }
+
 	pub fn into_ref (self) -> &'a D {
 		self.value
 	}
@@ -379,135 +387,9 @@ impl<K: Key, V: Keyable<Key = K>> Slotmap<K, V> {
 	pub fn values_mut (&mut self) -> ValueIterMut<'_, V> {
 		ValueIterMut(self.values.iter_mut())
 	}
-
-	pub fn collapse (self) -> CollapsedSlotmap<K, V> {
-		let mut map = HashMap::default();
-		let mut vec = Vec::default();
-
-		for (k, v) in self.into_iter() {
-			let i = vec.len();
-			map.insert(k, i);
-			vec.push(v);
-		}
-
-		CollapsedSlotmap {
-			map,
-			values: vec.into_boxed_slice()
-		}
-	}
-
-	pub fn collapse_cloned (&self) -> CollapsedSlotmap<K, V>
-	where V: Clone
-	{
-		let mut map = HashMap::default();
-		let mut vec = Vec::default();
-
-		for (&k, v) in self.iter() {
-			let i = vec.len();
-			map.insert(k, i);
-			vec.push(v.clone());
-		}
-
-		CollapsedSlotmap {
-			map,
-			values: vec.into_boxed_slice()
-		}
-	}
-
-	pub fn predict_collapse (&self) -> SlotmapCollapsePredictor<'_, K, V> {
-		let mut key_to_idx = HashMap::default();
-		let mut idx_to_key = Vec::default();
-
-		for (i, (&k, _)) in self.iter().enumerate() {
-			key_to_idx.insert(k, i);
-			idx_to_key.push(k);
-		}
-
-		SlotmapCollapsePredictor {
-			key_to_idx,
-			idx_to_key,
-			base: self
-		}
-	}
 }
 
 
-
-
-#[derive(Debug, Clone)]
-pub struct CollapsedSlotmap<K: Key, V: Keyable<Key = K>> {
-	map: HashMap<K, usize>,
-	values: Box<[V]>
-}
-
-impl<K: Key, V: Keyable<Key = K>> ops::Deref for CollapsedSlotmap<K, V> {
-	type Target = [V];
-	fn deref (&self) -> &[V] { self.values.as_ref() }
-}
-
-impl<K: Key, V: Keyable<Key = K>> ops::DerefMut for CollapsedSlotmap<K, V> {
-	fn deref_mut (&mut self) -> &mut [V] { self.values.as_mut() }
-}
-
-impl<K: Key, V: Keyable<Key = K>> CollapsedSlotmap<K, V> {
-	pub fn get_index (&self, k: K) -> Option<usize> {
-		self.map.get(&k).copied()
-	}
-
-	pub fn get_by_key (&self, k: K) -> Option<&V> {
-		self.get_index(k).and_then(move |idx| self.values.get(idx))
-	}
-
-	pub fn get_by_key_mut (&mut self, k: K) -> Option<&mut V> {
-		self.get_index(k).and_then(move |idx| self.values.get_mut(idx))
-	}
-
-	pub fn into_inner (self) -> Box<[V]> {
-		self.values
-	}
-}
-
-
-#[derive(Debug, Clone)]
-pub struct SlotmapCollapsePredictor<'s, K: Key, V: Keyable<Key = K>> {
-	key_to_idx: HashMap<K, usize>,
-	idx_to_key: Vec<K>,
-	base: &'s Slotmap<K, V>
-}
-
-impl<'s, K: Key, V: Keyable<Key = K>> SlotmapCollapsePredictor<'s, K, V> {
-	pub fn get_index (&self, k: K) -> Option<usize> {
-		self.key_to_idx.get(&k).copied()
-	}
-
-	pub fn get_key (&self, idx: usize) -> Option<K> {
-		self.idx_to_key.get(idx).copied()
-	}
-
-	pub fn len (&self) -> usize {
-		self.key_to_idx.len()
-	}
-
-	pub fn is_empty (&self) -> bool {
-		self.key_to_idx.is_empty()
-	}
-
-	pub fn get_value (&self, k: K) -> Option<&V> {
-		self.base.get(k)
-	}
-
-	pub fn get_value_keyed (&self, k: K) -> Option<Keyed<'_, V>> {
-		self.base.get_keyed(k)
-	}
-
-	pub fn get_value_by_index (&self, idx: usize) -> Option<&V> {
-		self.get_value(self.get_key(idx)?)
-	}
-
-	pub fn iter (&self) -> slice::Iter<'_, K> {
-		self.idx_to_key.iter()
-	}
-}
 
 
 pub struct ValueIter<'a, V> (slice::Iter<'a, Option<V>>);

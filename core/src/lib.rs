@@ -55,7 +55,7 @@ mod test {
 			f.ret();
 		});
 
-		let PartialResult { value: _function, error } = f.finalize();
+		let BuilderResult { value: _function, error } = f.finalize();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
@@ -135,7 +135,7 @@ mod test {
 			f.ret();
 		});
 
-		let PartialResult { value: function, error } = f.finalize();
+		let BuilderResult { value: function, error } = f.finalize();
 		let function = function.as_key();
 
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();

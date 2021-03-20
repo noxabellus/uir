@@ -2,7 +2,7 @@ use std::{cell::Ref, ops::{self, Deref}};
 
 use support::{slotmap::{AsKey, Keyed, KeyedMut}, utils::assert};
 
-use crate::cfg_generator;
+use crate::{cfg_generator, printer::Printable};
 
 use super::{
 	src::*,
@@ -245,6 +245,14 @@ impl<'a> BlockManipulator<'a> {
 	pub fn into_key (self) -> BlockKey {
 		self.0.into_key()
 	}
+
+	pub fn into_keyed (self) -> Keyed<'a, Block> {
+		self.0.into_keyed()
+	}
+
+	pub fn into_keyed_mut (self) -> KeyedMut<'a, Block> {
+		self.0
+	}
 }
 
 pub struct ParamManipulator<'a> (KeyedMut<'a, Param>);
@@ -310,6 +318,14 @@ impl<'a> ParamManipulator<'a> {
 
 	pub fn into_key (self) -> ParamKey {
 		self.0.into_key()
+	}
+
+	pub fn into_keyed (self) -> Keyed<'a, Param> {
+		self.0.into_keyed()
+	}
+
+	pub fn into_keyed_mut (self) -> KeyedMut<'a, Param> {
+		self.0
 	}
 }
 
@@ -379,6 +395,14 @@ impl<'a> LocalManipulator<'a> {
 	pub fn into_key (self) -> LocalKey {
 		self.0.into_key()
 	}
+
+	pub fn into_keyed (self) -> Keyed<'a, Local> {
+		self.0.into_keyed()
+	}
+
+	pub fn into_keyed_mut (self) -> KeyedMut<'a, Local> {
+		self.0
+	}
 }
 
 
@@ -441,6 +465,14 @@ impl<'a> GlobalManipulator<'a> {
 
 	pub fn into_key (self) -> GlobalKey {
 		self.0.into_key()
+	}
+
+	pub fn into_keyed (self) -> Keyed<'a, Global> {
+		self.0.into_keyed()
+	}
+
+	pub fn into_keyed_mut (self) -> KeyedMut<'a, Global> {
+		self.0
 	}
 }
 
@@ -505,6 +537,14 @@ impl<'a> FunctionManipulator<'a> {
 	pub fn into_key (self) -> FunctionKey {
 		self.0.into_key()
 	}
+
+	pub fn into_keyed (self) -> Keyed<'a, Function> {
+		self.0.into_keyed()
+	}
+
+	pub fn into_keyed_mut (self) -> KeyedMut<'a, Function> {
+		self.0
+	}
 }
 
 
@@ -568,6 +608,14 @@ impl<'a> TyManipulator<'a> {
 	pub fn into_key (self) -> TyKey {
 		self.0.into_key()
 	}
+
+	pub fn into_keyed (self) -> Keyed<'a, Ty> {
+		self.0.into_keyed()
+	}
+
+	pub fn into_keyed_mut (self) -> KeyedMut<'a, Ty> {
+		self.0
+	}
 }
 
 
@@ -624,13 +672,13 @@ pub enum Either<A, B> {
 	B(B),
 }
 
-pub struct PartialResult<T, E> {
+pub struct BuilderResult<T, E> {
 	pub value: T,
 	pub error: Option<E>,
 }
 
 
-impl<T, E> PartialResult<T, E> {
+impl<T, E> BuilderResult<T, E> {
 	pub fn new (value: T, error: Option<E>) -> Self {
 		Self { value, error }
 	}
@@ -646,7 +694,7 @@ impl<T, E> PartialResult<T, E> {
 	where E: std::fmt::Debug
 	{
 		if let Some(err) = self.error {
-			panic!("Cannot unwrap PartialResult: {:#?}", err)
+			panic!("Cannot unwrap BuilderResult: {:#?}", err)
 		}
 
 		self.value
@@ -656,28 +704,108 @@ impl<T, E> PartialResult<T, E> {
 	where E: std::fmt::Debug
 	{
 		if let Some(err) = self.error {
-			panic!("Expected {} for PartialResult but found err: {:#?}", description, err)
+			panic!("Expected {} for BuilderResult but found err: {:#?}", description, err)
 		}
 
 		self.value
 	}
 
-	pub fn map<U> (self, f: impl FnOnce (T) -> U) -> PartialResult<U, E> {
-		PartialResult::new(f(self.value), self.error)
+	pub fn map<U> (self, f: impl FnOnce (T) -> U) -> BuilderResult<U, E> {
+		BuilderResult::new(f(self.value), self.error)
 	}
 }
 
-impl<T> PartialResult<T, IrErr> {
-	pub fn unwrap_rich (self, ctx: &Context) -> T {
-		use crate::printer::PrinterState;
+use std::fmt;
+use crate::printer::{ self, PrinterState };
+
+pub trait RichUnwrap<'c> {
+	type Printer: fmt::Display;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer;
+}
+
+impl<'c> RichUnwrap<'c> for TyManipulator<'c> {
+	type Printer = printer::TyPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Ty>::create_printer(self.into_keyed(), state)
+	}
+}
+
+impl<'c> RichUnwrap<'c> for Keyed<'c, Ty> {
+	type Printer = printer::TyPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Ty>::create_printer(self, state)
+	}
+}
+
+impl<'c> RichUnwrap<'c> for TyKey {
+	type Printer = printer::TyPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Ty>::create_printer(Keyed::new(self, state.ctx.tys.get(self).unwrap()), state)
+	}
+}
+
+
+impl<'c> RichUnwrap<'c> for GlobalManipulator<'c> {
+	type Printer = printer::GlobalPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Global>::create_printer(self.into_keyed(), state)
+	}
+}
+
+impl<'c> RichUnwrap<'c> for Keyed<'c, Global> {
+	type Printer = printer::GlobalPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Global>::create_printer(self, state)
+	}
+}
+
+impl<'c> RichUnwrap<'c> for GlobalKey {
+	type Printer = printer::GlobalPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Global>::create_printer(Keyed::new(self, state.ctx.globals.get(self).unwrap()), state)
+	}
+}
+
+
+impl<'c> RichUnwrap<'c> for FunctionManipulator<'c> {
+	type Printer = printer::FunctionPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Function>::create_printer(self.into_keyed(), state)
+	}
+}
+
+impl<'c> RichUnwrap<'c> for Keyed<'c, Function> {
+	type Printer = printer::FunctionPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Function>::create_printer(self, state)
+	}
+}
+
+impl<'c> RichUnwrap<'c> for FunctionKey {
+	type Printer = printer::FunctionPrinter<'c, 'c>;
+	fn print (self, state: PrinterState<'c>) -> Self::Printer {
+		Keyed::<'c, Function>::create_printer(Keyed::new(self, state.ctx.functions.get(self).unwrap()), state)
+	}
+}
+
+impl<'c, T> BuilderResult<T, IrErr> {
+	pub fn take_rich<U: RichUnwrap<'c>> (self, ctx: &'c Context, f: impl FnOnce (T) -> U) -> U {
+		self.map(f).unwrap_rich(ctx)
+	}
+}
+
+impl<'c, T: RichUnwrap<'c>> BuilderResult<T, IrErr> {
+
+
+	pub fn unwrap_rich (self, ctx: &'c Context) -> T {
 		if let Some(err) = self.error {
-			panic!("Cannot unwrap PartialResult: {}", PrinterState::new(ctx).with_error(Some(err)).print_self())
+			let state = PrinterState::new(ctx).with_error(Some(err));
+			panic!("Cannot unwrap BuilderResult:\n{}", self.value.print(state))
 		}
 
 		self.value
 	}
 }
-
 
 
 
@@ -974,7 +1102,7 @@ impl<'c> Builder<'c> {
 	}
 
 
-	pub fn create_global (&mut self, ty: TyKey, init: Option<Constant>) -> PartialResult<GlobalManipulator, IrErr> {
+	pub fn create_global (&mut self, ty: TyKey, init: Option<Constant>) -> BuilderResult<GlobalManipulator, IrErr> {
 		let g = self.ctx.globals.insert(Global {
 			ty,
 			init,
@@ -983,7 +1111,7 @@ impl<'c> Builder<'c> {
 
 		let result = ty_checker::check_global(self, g);
 
-		PartialResult::new(self.get_global_mut(g).unwrap(), result.err())
+		BuilderResult::new(self.get_global_mut(g).unwrap(), result.err())
 	}
 
 
@@ -1098,13 +1226,13 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn finalize (mut self) -> PartialResult<FunctionManipulator<'b>, IrErr> {
+	pub fn finalize (mut self) -> BuilderResult<FunctionManipulator<'b>, IrErr> {
 		self.clear_active_block();
 
 		let function_key = self.function_key;
 
 		if let Err(e) = self.generate_own_ty() {
-			return PartialResult::new(
+			return BuilderResult::new(
 				FunctionManipulator(self.builder.ctx.functions.define(function_key, self.function).unwrap()),
 				Some(e.at(FunctionErrLocation::Root.at(function_key)))
 			)
@@ -1129,13 +1257,13 @@ impl<'b> FunctionBuilder<'b> {
 						function.cfg = cfg;
 						function.ty_map = ty_map;
 
-						PartialResult::new(function, None)
+						BuilderResult::new(function, None)
 					}
 
-					Err(e) => PartialResult::new(builder.get_function_mut(function_key).unwrap(), Some(e))
+					Err(e) => BuilderResult::new(builder.get_function_mut(function_key).unwrap(), Some(e))
 				}
 			},
-			Err(e) => PartialResult::new(builder.get_function_mut(function_key).unwrap(), Some(e))
+			Err(e) => BuilderResult::new(builder.get_function_mut(function_key).unwrap(), Some(e))
 		}
 	}
 

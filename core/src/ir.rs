@@ -1,6 +1,6 @@
-use std::{fmt, hint::unreachable_unchecked, ops};
+use std::{fmt, ops};
 
-use support::slotmap::{KeyedMut, Slotmap, SlotmapCollapsePredictor};
+use support::slotmap::{KeyedMut, Slotmap};
 
 use super::{
 	cfg::Cfg,
@@ -451,15 +451,13 @@ pub struct Meta {
 }
 
 impl Meta {
-	pub fn predict_collapse (&self) -> MetaCollapsePredictor<'_> {
-		MetaCollapsePredictor {
-			ty: self.ty.predict_collapse(),
-			function: self.function.predict_collapse(),
-			param: self.param.predict_collapse(),
-			local: self.local.predict_collapse(),
-			global: self.global.predict_collapse(),
-			ir: self.ir.predict_collapse(),
-		}
+	pub fn is_empty (&self) -> bool {
+		   self.ty.is_empty()
+		&& self.function.is_empty()
+		&& self.param.is_empty()
+		&& self.local.is_empty()
+		&& self.global.is_empty()
+		&& self.ir.is_empty()
 	}
 }
 
@@ -492,98 +490,5 @@ impl Context {
 
 	pub(crate) fn add_ty(&mut self, ty: Ty) -> KeyedMut<Ty> {
 		self.tys.insert(ty)
-	}
-
-	pub fn predict_collapse (&self) -> ContextCollapsePredictor<'_> {
-		ContextCollapsePredictor {
-			context: self,
-
-			srcs: self.srcs.predict_collapse(),
-
-			tys: self.tys.predict_collapse(),
-			functions: self.functions.predict_collapse(),
-			globals: self.globals.predict_collapse(),
-
-			meta: self.meta.predict_collapse(),
-		}
-	}
-}
-
-
-
-#[derive(Debug)]
-pub struct MetaCollapsePredictor<'c> {
-	pub ty: SlotmapCollapsePredictor<'c, TyMetaKey, TyMeta>,
-	pub function: SlotmapCollapsePredictor<'c, FunctionMetaKey, FunctionMeta>,
-	pub param: SlotmapCollapsePredictor<'c, ParamMetaKey, ParamMeta>,
-	pub local: SlotmapCollapsePredictor<'c, LocalMetaKey, LocalMeta>,
-	pub global: SlotmapCollapsePredictor<'c, GlobalMetaKey, GlobalMeta>,
-	pub ir: SlotmapCollapsePredictor<'c, IrMetaKey, IrMeta>,
-}
-
-impl<'c> MetaCollapsePredictor<'c> {
-	pub fn is_empty (&self) -> bool {
-		   self.ty.is_empty()
-		&& self.function.is_empty()
-		&& self.param.is_empty()
-		&& self.local.is_empty()
-		&& self.global.is_empty()
-		&& self.ir.is_empty()
-	}
-}
-
-
-#[derive(Debug)]
-pub struct ContextCollapsePredictor<'c> {
-	pub context: &'c Context,
-
-	pub srcs: SlotmapCollapsePredictor<'c, SrcKey, Src>,
-
-	pub tys: SlotmapCollapsePredictor<'c, TyKey, Ty>,
-	pub functions: SlotmapCollapsePredictor<'c, FunctionKey, Function>,
-	pub globals: SlotmapCollapsePredictor<'c, GlobalKey, Global>,
-
-	pub meta: MetaCollapsePredictor<'c>
-}
-
-impl<'c> ContextCollapsePredictor<'c> {
-	pub fn function_predictor (&self, key: FunctionKey) -> Option<FunctionCollapsePredictor<'c>> {
-		if let Some(index) = self.functions.get_index(key) {
-			if let Some(value) = self.context.functions.get(key) {
-				return Some(value.predict_collapse(index, key))
-			} else {
-				// SAFETY: if there is an index there must be a value
-				unsafe { unreachable_unchecked() }
-			}
-		} else {
-			None
-		}
-	}
-}
-
-
-#[derive(Debug)]
-pub struct FunctionCollapsePredictor<'c> {
-	pub function: &'c Function,
-	pub own_index: usize,
-	pub own_key: FunctionKey,
-	pub locals: SlotmapCollapsePredictor<'c, LocalKey, Local>,
-}
-
-impl<'c> ops::Deref for FunctionCollapsePredictor<'c> {
-	type Target = Function;
-	fn deref (&self) -> &Self::Target {
-		&self.function
-	}
-}
-
-impl Function {
-	pub fn predict_collapse (&self, own_index: usize, own_key: FunctionKey,) -> FunctionCollapsePredictor<'_> {
-		FunctionCollapsePredictor {
-			function: self,
-			own_index,
-			own_key,
-			locals: self.locals.predict_collapse()
-		}
 	}
 }
