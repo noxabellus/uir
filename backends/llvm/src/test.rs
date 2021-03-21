@@ -181,7 +181,7 @@ fn optimize_get_set_element () {
 	println!("{:#?}\n{:#?}", llv2f, llfunction);
 	llfunction.verify_function(LLVMAbortProcessAction);
 
-	let mut optimizer = Optimizer::with_level(&mut emitter, 3);
+	let mut optimizer = Optimizer::with_level(&emitter, 3);
 	assert!(optimizer.optimize(llfunction), "failed to optimize");
 	println!("optimized ir:\n{:#?}", llfunction);
 }
