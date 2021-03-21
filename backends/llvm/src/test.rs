@@ -22,6 +22,7 @@ use {
 	crate::{
 		Emitter,
 		Optimizer,
+		Jit,
 		wrapper::*,
 	},
 };
@@ -271,7 +272,8 @@ fn fib () -> IrResult {
 
 
 #[test]
-fn optimize_fib () -> IrResult {
+#[cfg(feature = "jit")]
+fn jit_fib () -> IrResult {
 	let mut context = Context::with_target(target::AMD64);
 	let mut builder = Builder::new(&mut context);
 	let mut f = FunctionBuilder::new(&mut builder);
@@ -327,7 +329,8 @@ fn optimize_fib () -> IrResult {
 		f.call()
 		 .set_name("fib_n-2");
 
-		f.binary_op(Add);
+		f.binary_op(Add)
+		 .set_name("sum");
 
 		f.branch(end);
 	});
@@ -348,9 +351,29 @@ fn optimize_fib () -> IrResult {
 	println!("{:?}", llfunction);
 	llfunction.verify_function(LLVMAbortProcessAction);
 
-	let mut optimizer = Optimizer::with_level(&mut emitter, 3);
+	let mut optimizer = Optimizer::with_level(&emitter, 3);
 	assert!(optimizer.optimize(llfunction), "failed to optimize");
 	println!("optimized ir:\n{:#?}", llfunction);
+
+	let mut jit = Jit::new(&mut emitter);
+
+	let fib = jit.get_function(llvm_str!("fib"));
+	assert!(fib != std::ptr::null(), "Failed to compile function");
+	let fib = unsafe { std::mem::transmute::<_, extern "C" fn (i32) -> i32>(fib) };
+
+	fn nat_fib (n: i32) -> i32 {
+		if n < 2 { n }
+		else { nat_fib(n-1) + nat_fib(n-2) }
+	};
+
+	let n = 17;
+	let t = nat_fib(n);
+	let x = fib(n);
+
+
+	println!("nat_fib({}) = {}", n, t);
+	println!("fib({}) = {}", n, x);
+	assert_eq!(t, x);
 
 	Ok(())
 }
@@ -686,7 +709,7 @@ typedef unsigned long uint64_ty;
 				let struct_function_abi = emitter.abi_info(ll_struct_function_user_ty);
 				let ll_struct_function_ty = struct_function_abi.lltype;
 
-				let ll_struct_function = LLVMValue::create_function(emitter.module, ll_struct_function_ty, llvm_str!(concat!("fn_struct_", stringify!($name))));
+				let ll_struct_function = LLVMValue::create_function(emitter.module.inner(), ll_struct_function_ty, llvm_str!(concat!("fn_struct_", stringify!($name))));
 				struct_function_abi.apply_attributes(emitter.ll.ctx, ll_struct_function);
 
 				let ll_mod = llvm_from_c(build_c_abi_str!($name ($( $field_name : $field_ty ),*)));

@@ -109,7 +109,7 @@ impl<'a> Emitter<'a> {
 	}
 
 
-	pub fn emit_prim_ty (&self, prim: PrimitiveTy) -> LLVMType {
+	pub fn emit_prim_ty (&mut self, prim: PrimitiveTy) -> LLVMType {
 		use PrimitiveTy::*;
 
 		match prim {
@@ -355,7 +355,7 @@ impl<'a> Emitter<'a> {
 			Self::generate_id("g", global_key)
 		};
 
-		let llglobal = LLVMValue::create_global(self.module, llty, llname);
+		let llglobal = LLVMValue::create_global(self.module.inner(), llty, llname);
 
 		if let Some(init_const) = global.init.as_ref() {
 			let (llinit, llconst_ty) = self.emit_constant(init_const);
@@ -387,7 +387,7 @@ impl<'a> Emitter<'a> {
 			Self::generate_id("f", function_key)
 		};
 
-		let func = LLVMValue::create_function(self.module, abi_llty, llname);
+		let func = LLVMValue::create_function(self.module.inner(), abi_llty, llname);
 
 		self.functions.insert(function_key, func);
 
@@ -753,8 +753,8 @@ impl<'a> Emitter<'a> {
 			IrData::BinaryOp(bin_op) => {
 				// dbg!(bin_op);
 
-				let a = fstate.stack.pop().unwrap();
 				let b = fstate.stack.pop().unwrap();
+				let a = fstate.stack.pop().unwrap();
 
 				let ty = self.ctx.tys.get(a.ty_key).unwrap();
 
@@ -1234,7 +1234,7 @@ impl<'a> Emitter<'a> {
 
 
 
-	pub fn emit_bin_op (&self, bin_op: BinaryOp, a: Value, b: Value, ty: &'a Ty) -> (LLVMValue, LLVMType) {
+	pub fn emit_bin_op (&mut self, bin_op: BinaryOp, a: Value, b: Value, ty: &'a Ty) -> (LLVMValue, LLVMType) {
 		use BinaryOp::*;
 
 		let int1 = LLVMType::int1(self.ll.ctx);
@@ -1339,7 +1339,7 @@ impl<'a> Emitter<'a> {
 	}
 
 
-	pub fn emit_un_op (&self, un_op: UnaryOp, e: Value, ty: &'a Ty) -> (LLVMValue, LLVMType) {
+	pub fn emit_un_op (&mut self, un_op: UnaryOp, e: Value, ty: &'a Ty) -> (LLVMValue, LLVMType) {
 		use UnaryOp::*;
 
 		match un_op {
@@ -1360,7 +1360,7 @@ impl<'a> Emitter<'a> {
 		}
 	}
 
-	pub fn emit_cast_op (&self, cast_op: CastOp, e: Value, ty: &'a Ty, target_ty: &'a Ty, lltgt_ty: LLVMType) -> LLVMValue {
+	pub fn emit_cast_op (&mut self, cast_op: CastOp, e: Value, ty: &'a Ty, target_ty: &'a Ty, lltgt_ty: LLVMType) -> LLVMValue {
 		use CastOp::*;
 
 		match cast_op {

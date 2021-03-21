@@ -736,8 +736,8 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 			BinaryOp(op)
 			=> {
-				let left = self.builder.get_ty(self.stack.pop()?)?;
 				let right = self.stack.pop()?;
+				let left = self.builder.get_ty(self.stack.pop()?)?;
 
 				assert(self.ty_ck(left, right), TyErr::BinaryOpTypeMismatch(left.as_key(), right))?;
 				let ty = self.check_bin_op(*op, left)?.as_key();

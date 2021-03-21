@@ -6,6 +6,7 @@ use super::{
 };
 
 pub trait Target: fmt::Debug + Any {
+	fn is_native (&self) -> bool;
 	fn primitive_layout (&self, ty: PrimitiveTy) -> Layout;
 	fn word_size (&self) -> u32;
 
@@ -21,6 +22,7 @@ pub trait Target: fmt::Debug + Any {
 			_ => unreachable!("Target provided unsupported pointer Layout")
 		}
 	}
+
 }
 
 
@@ -28,10 +30,14 @@ pub trait Target: fmt::Debug + Any {
 
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AMD64;
 
 impl Target for AMD64 {
+	fn is_native (&self) -> bool {
+		NATIVE_TARGET == Self
+	}
+
 	fn primitive_layout (&self, ty: PrimitiveTy) -> Layout {
 		use PrimitiveTy::*;
 

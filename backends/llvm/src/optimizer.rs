@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use llvm_sys::transforms::pass_manager_builder::*;
 
 use crate::{
@@ -8,19 +6,18 @@ use crate::{
 };
 
 
-pub struct Optimizer<'x, 'e> {
+pub struct Optimizer {
 	builder: LLVMPassManagerBuilderRef,
-	module: LLVMModuleRef,
+	module: LLVMModule,
 	pass: Option<LLVMPassManagerRef>,
 	opt_level: u32,
-	_phantom: PhantomData<&'x mut Emitter<'e>>,
 }
 
-impl<'x, 'e> Optimizer<'x, 'e> {
-	pub fn new (emitter: &'x mut Emitter<'e>) -> Self {
+impl Optimizer {
+	pub fn new (emitter: &Emitter) -> Self {
 		let builder = unsafe { LLVMPassManagerBuilderCreate() };
 
-		Self { builder, module: emitter.module, pass: None, opt_level: 0, _phantom: PhantomData }
+		Self { builder, module: emitter.module.borrow(), pass: None, opt_level: 0 }
 	}
 
 	pub fn set_level (&mut self, opt_level: u32) {
@@ -34,7 +31,7 @@ impl<'x, 'e> Optimizer<'x, 'e> {
 		self.opt_level
 	}
 
-	pub fn with_level (emitter: &'x mut Emitter<'e>, opt_level: u32) -> Self {
+	pub fn with_level (emitter: &Emitter, opt_level: u32) -> Self {
 		let mut s = Self::new(emitter);
 		s.set_level(opt_level);
 		s
@@ -44,7 +41,7 @@ impl<'x, 'e> Optimizer<'x, 'e> {
 		if self.pass.is_some() {
 			self.pass
 		} else { unsafe {
-			let pass = LLVMCreateFunctionPassManagerForModule(self.module);
+			let pass = LLVMCreateFunctionPassManagerForModule(self.module.inner());
 
 			if LLVMInitializeFunctionPassManager(pass) != LLVM_OK { return None }
 
@@ -60,14 +57,14 @@ impl<'x, 'e> Optimizer<'x, 'e> {
 
 	pub fn optimize (&mut self, function: LLVMValue) -> bool {
 		assert!(function.is_function_node(), "Expected a function for optimizer");
-		debug_assert!(function.get_global_parent() == self.module);
+		debug_assert!(function.get_global_parent() == self.module.inner());
 		let function_pass = self.function_pass().expect("valid opt level");
 		unsafe { LLVMRunFunctionPassManager(function_pass, function.into()) == LLVM_TRUE }
 	}
 }
 
 
-impl<'x, 'e> Drop for Optimizer<'x, 'e> {
+impl Drop for Optimizer {
 	fn drop (&mut self) { unsafe {
 		if let Some(pass) = self.pass.take() { LLVMDisposePassManager(pass) }
 		LLVMPassManagerBuilderDispose(self.builder);

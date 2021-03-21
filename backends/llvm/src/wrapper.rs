@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt};
 
 use llvm_sys::analysis::{LLVMVerifierFailureAction, LLVMVerifyFunction};
 pub use llvm_sys::{LLVMTypeKind, LLVMTypeKind::*, LLVMValueKind, LLVMValueKind::*, core::*, prelude::*};
@@ -9,6 +9,68 @@ use uir_core::ty::PrimitiveTy;
 pub const LLVM_OK: LLVMBool = 0;
 pub const LLVM_FALSE: LLVMBool = 0;
 pub const LLVM_TRUE: LLVMBool = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Ownership {
+	Owned, Borrowed
+}
+
+pub struct LLVMModule {
+	ownership: Ownership,
+	llmod: LLVMModuleRef,
+}
+
+impl LLVMModule {
+	pub fn owned (llmod: LLVMModuleRef) -> Self {
+		Self { ownership: Ownership::Owned, llmod }
+	}
+
+	pub fn borrowed (llmod: LLVMModuleRef) -> Self {
+		Self { ownership: Ownership::Borrowed, llmod }
+	}
+
+	pub fn is_owned (&self) -> bool {
+		self.ownership == Ownership::Owned
+	}
+
+	pub fn take (&mut self) -> LLVMModule {
+		assert!(self.ownership == Ownership::Owned);
+
+		self.ownership = Ownership::Borrowed;
+
+		LLVMModule {
+			ownership: Ownership::Owned,
+			llmod: self.llmod
+		}
+	}
+
+	pub fn borrow (&self) -> LLVMModule {
+		LLVMModule {
+			ownership: Ownership::Borrowed,
+			llmod: self.llmod
+		}
+	}
+
+	pub fn leak (self) -> LLVMModuleRef {
+		assert!(self.ownership == Ownership::Owned);
+
+		let x = self.llmod;
+
+		std::mem::forget(self);
+
+		x
+	}
+
+	pub fn inner (&self) -> LLVMModuleRef {
+		self.llmod
+	}
+}
+
+impl Drop for LLVMModule {
+	fn drop (&mut self) {
+		if self.is_owned() { unsafe { LLVMDisposeModule(self.llmod) } }
+	}
+}
 
 
 unsafe fn strlen (p: *const i8) -> usize {
@@ -72,6 +134,10 @@ impl LLVMString {
 		self.bytes.as_ptr() as *const i8
 	}
 }
+
+
+
+
 
 
 #[repr(transparent)]
@@ -1266,14 +1332,14 @@ impl LLVMValue {
 
 pub struct LLVM {
 	pub ctx: LLVMContextRef,
-	pub module: LLVMModuleRef,
+	pub module: LLVMModule,
 	pub builder: LLVMBuilderRef,
 }
 
 
 impl fmt::Display for LLVM {
 	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		let alloc = unsafe { LLVMPrintModuleToString(self.module) };
+		let alloc = unsafe { LLVMPrintModuleToString(self.module.inner()) };
 		let s = unsafe { std::ffi::CStr::from_ptr(alloc).to_str().unwrap_or("[Err printing llvm module to string]") };
 
 		write!(f, "{}", s)?;
@@ -1293,7 +1359,7 @@ impl LLVM {
 
 			Self {
 				ctx,
-				module,
+				module: LLVMModule::owned(module),
 				builder
 			}
 		}
@@ -1554,7 +1620,6 @@ impl Drop for LLVM {
 	fn drop (&mut self) {
 		unsafe {
 			LLVMDisposeBuilder(self.builder);
-			LLVMDisposeModule(self.module);
 			LLVMContextDispose(self.ctx);
 		}
 	}
