@@ -24,6 +24,7 @@ mod test {
 		builder::*,
 		target,
 		block,
+		with_block,
 		printer::PrinterState,
 	};
 	use BinaryOp::*;
@@ -111,7 +112,7 @@ mod test {
 		let recurse = f.append_new_block().set_name("recurse").as_key();
 		let end = f.append_new_block().set_name("end").as_key();
 
-		block!(f, entry => {
+		with_block!(f, entry => {
 			f.param_ref(n);
 			f.load();
 			f.const_sint32(2);
@@ -121,13 +122,13 @@ mod test {
 			f.cond_branch(use_n, recurse);
 		});
 
-		block!(f, use_n => {
+		with_block!(f, use_n => {
 			f.param_ref(n);
 			f.load();
 			f.branch(end);
 		});
 
-		block!(f, recurse => {
+		with_block!(f, recurse => {
 			f.param_ref(n);
 			f.load();
 			f.const_sint32(1);
@@ -150,7 +151,7 @@ mod test {
 			f.branch(end);
 		});
 
-		block!(f, end => {
+		with_block!(f, end => {
 			f.phi(s32t)
 			 .set_name("result");
 

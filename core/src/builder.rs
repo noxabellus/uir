@@ -1358,6 +1358,8 @@ impl<'b> FunctionBuilder<'b> {
 
 	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrDataResult<TyManipulator> { self.builder.pointer_ty(target_ty) }
 	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u32, element_ty: K) -> IrDataResult<TyManipulator> { self.builder.array_ty(length, element_ty) }
+	pub fn empty_structure_ty (&mut self) -> TyManipulator { self.builder.empty_structure_ty() }
+	pub fn set_structure_ty_body (&mut self, ty_key: TyKey, body: Vec<TyKey>) -> IrDataResult<TyManipulator> { self.builder.set_structure_ty_body(ty_key, body) }
 	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrDataResult<TyManipulator> { self.builder.structure_ty(field_tys) }
 	pub fn function_ty (&mut self, parameter_tys: Vec<TyKey>, result_ty: Option<TyKey>) -> IrDataResult<TyManipulator> { self.builder.function_ty(parameter_tys, result_ty) }
 
@@ -1870,6 +1872,14 @@ impl<'b> FunctionBuilder<'b> {
 		self.write_node(IrData::BuildAggregate(ty_key, data))
 	}
 
+	pub fn get_element (&mut self, idx: u32) -> IrManipulator {
+		self.write_node(IrData::GetElement(idx))
+	}
+
+	pub fn set_element (&mut self, idx: u32) -> IrManipulator {
+		self.write_node(IrData::SetElement(idx))
+	}
+
 	pub fn global_ref<K: AsKey<GlobalKey>> (&mut self, key: K) -> IrManipulator {
 		let key = key.as_key();
 
@@ -1923,7 +1933,7 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn gep (&mut self, num_indices: u64) -> IrManipulator {
+	pub fn gep (&mut self, num_indices: u32) -> IrManipulator {
 		self.write_node(IrData::Gep(num_indices))
 	}
 
@@ -1967,16 +1977,16 @@ impl<'b> FunctionBuilder<'b> {
 	}
 
 
-	pub fn duplicate (&mut self) -> IrManipulator {
-		self.write_node(IrData::Duplicate)
+	pub fn duplicate (&mut self, idx: u32) -> IrManipulator {
+		self.write_node(IrData::Duplicate(idx))
 	}
 
-	pub fn discard (&mut self) -> IrManipulator {
-		self.write_node(IrData::Discard)
+	pub fn discard (&mut self, idx: u32) -> IrManipulator {
+		self.write_node(IrData::Discard(idx))
 	}
 
-	pub fn swap (&mut self) -> IrManipulator {
-		self.write_node(IrData::Swap)
+	pub fn swap (&mut self, idx: u32) -> IrManipulator {
+		self.write_node(IrData::Swap(idx))
 	}
 
 

@@ -1016,6 +1016,8 @@ impl<'data, 'ctx> fmt::Display for IrDataPrinter<'data, 'ctx> {
 			IrData::Constant(constant) => { write!(f, "constant {}", self.child(constant)) }
 
 			IrData::BuildAggregate(ty_key, aggregate_data) => { write!(f, "build_aggregate {} {}", self.child(ty_key), self.child(aggregate_data)) }
+			IrData::SetElement(idx) => { write!(f, "set_element {}", self.child(idx)) }
+			IrData::GetElement(idx) => { write!(f, "get_element {}", self.child(idx)) }
 
 			IrData::GlobalRef(global_key) => { write!(f, "ref {}", self.child(global_key)) }
 			IrData::FunctionRef(function_key) => { write!(f, "ref {}", self.child(function_key)) }
@@ -1041,9 +1043,9 @@ impl<'data, 'ctx> fmt::Display for IrDataPrinter<'data, 'ctx> {
 			IrData::Call => { write!(f, "call") }
 			IrData::Ret => { write!(f, "ret") }
 
-			IrData::Duplicate => { write!(f, "duplicate") }
-			IrData::Discard => { write!(f, "discard") }
-			IrData::Swap => { write!(f, "swap") }
+			IrData::Duplicate(idx) => { write!(f, "duplicate {}", self.child(idx)) }
+			IrData::Discard(idx) => { write!(f, "discard {}", self.child(idx)) }
+			IrData::Swap(idx) => { write!(f, "swap {}", self.child(idx)) }
 
 			IrData::Unreachable => { write!(f, "unreachable") }
 		}

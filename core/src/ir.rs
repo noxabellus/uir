@@ -197,6 +197,8 @@ pub enum IrData {
 	Constant(Constant),
 
 	BuildAggregate(TyKey, AggregateData),
+	SetElement(u32),
+	GetElement(u32),
 
 	GlobalRef(GlobalKey),
 	FunctionRef(FunctionKey),
@@ -210,7 +212,7 @@ pub enum IrData {
 	UnaryOp(UnaryOp),
 	CastOp(CastOp, TyKey),
 
-	Gep(u64),
+	Gep(u32),
 	Load,
 	Store,
 
@@ -222,9 +224,9 @@ pub enum IrData {
 	Call,
 	Ret,
 
-	Duplicate,
-	Discard,
-	Swap,
+	Duplicate(u32),
+	Discard(u32),
+	Swap(u32),
 
 	Unreachable,
 }

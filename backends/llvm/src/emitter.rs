@@ -8,7 +8,7 @@ use std::{collections::HashMap, ops};
 use crate::wrapper::*;
 
 
-pub struct LLVMBackend<'a> {
+pub struct Emitter<'a> {
 	pub ctx: &'a Context,
 	pub abi: Box<dyn Abi>,
 	pub ll: LLVM,
@@ -18,7 +18,7 @@ pub struct LLVMBackend<'a> {
 	pub target_signature_types: HashMap<LLVMType, abi::Function>,
 }
 
-pub struct LLVMFunctionState<'c> {
+pub struct EmitterFunctionState<'c> {
 	pub func: &'c Function,
 	pub llfunc: LLVMValue,
 	pub fn_key: FunctionKey,
@@ -31,16 +31,16 @@ pub struct LLVMFunctionState<'c> {
 	pub sret  : Option<LLVMValue>,
 }
 
-impl<'a> ops::Deref for LLVMBackend<'a> {
+impl<'a> ops::Deref for Emitter<'a> {
 	type Target = LLVM;
 	fn deref (&self) -> &LLVM { &self.ll }
 }
 
-impl<'a> ops::DerefMut for LLVMBackend<'a> {
+impl<'a> ops::DerefMut for Emitter<'a> {
 	fn deref_mut (&mut self) -> &mut LLVM { &mut self.ll }
 }
 
-impl<'c> LLVMFunctionState<'c> {
+impl<'c> EmitterFunctionState<'c> {
 	pub fn new (llfunc: LLVMValue, fn_key: FunctionKey, func: &'c Function) -> Self {
 		Self {
 			llfunc,
@@ -79,7 +79,7 @@ impl Value {
 	}
 }
 
-impl<'a> LLVMBackend<'a> {
+impl<'a> Emitter<'a> {
 	pub fn new (ctx: &'a Context) -> Option<Self> {
 		let abi = abi::get_abi(ctx.target.as_ref())?;
 
@@ -97,7 +97,7 @@ impl<'a> LLVMBackend<'a> {
 	}
 
 
-	pub fn ir (&self, fstate: &mut LLVMFunctionState<'a>, ir_idx: usize) -> Option<&'a Ir> {
+	pub fn ir (&self, fstate: &mut EmitterFunctionState<'a>, ir_idx: usize) -> Option<&'a Ir> {
 		self.ctx
 			.functions.get(fstate.fn_key)
 			.unwrap()
@@ -395,7 +395,8 @@ impl<'a> LLVMBackend<'a> {
 	}
 
 
-	pub fn ir_ty (&self, fstate: &mut LLVMFunctionState, ir_idx: usize) -> TyKey {
+	#[cfg_attr(debug_assertions, track_caller)]
+	pub fn ir_ty (&self, fstate: &mut EmitterFunctionState, ir_idx: usize) -> TyKey {
 		fstate.func.ty_map.get(fstate.block_key, ir_idx)
 	}
 
@@ -404,7 +405,7 @@ impl<'a> LLVMBackend<'a> {
 
 		let llfunc = self.emit_function_decl(function_key);
 
-		let mut fstate = LLVMFunctionState::new(llfunc, function_key, &func);
+		let mut fstate = EmitterFunctionState::new(llfunc, function_key, &func);
 
 		let _entry = self.emit_entry(&mut fstate);
 
@@ -446,7 +447,7 @@ impl<'a> LLVMBackend<'a> {
 		llfunc
 	}
 
-	pub fn emit_block_body (&mut self, fstate: &mut LLVMFunctionState<'a>) -> (Stack<Value>, Stack<Value>) {
+	pub fn emit_block_body (&mut self, fstate: &mut EmitterFunctionState<'a>) -> (Stack<Value>, Stack<Value>) {
 		let block = fstate.func.block_data.get(fstate.block_key).unwrap();
 		self.position_at_end(fstate.llblock);
 
@@ -474,7 +475,7 @@ impl<'a> LLVMBackend<'a> {
 		(in_vals, std::mem::take(&mut fstate.stack))
 	}
 
-	pub fn emit_init_node (&mut self, fstate: &mut LLVMFunctionState<'a>, ir_idx: usize, ir: &Ir) -> Value {
+	pub fn emit_init_node (&mut self, fstate: &mut EmitterFunctionState<'a>, ir_idx: usize, ir: &Ir) -> Value {
 		match &ir.data {
 			IrData::Phi(phi_ty_key) => {
 				// dbg!(phi_ty_key);
@@ -496,6 +497,8 @@ impl<'a> LLVMBackend<'a> {
 
 			| IrData::Constant { .. }
 			| IrData::BuildAggregate { .. }
+			| IrData::GetElement { .. }
+			| IrData::SetElement { .. }
 			| IrData::GlobalRef { .. }
 			| IrData::FunctionRef { .. }
 			| IrData::BlockRef { .. }
@@ -513,15 +516,15 @@ impl<'a> LLVMBackend<'a> {
 			| IrData::ComputedBranch { .. }
 			| IrData::Call
 			| IrData::Ret
-			| IrData::Duplicate
-			| IrData::Discard
-			| IrData::Swap
+			| IrData::Duplicate { .. }
+			| IrData::Discard { .. }
+			| IrData::Swap { .. }
 			| IrData::Unreachable
 			=> unreachable!()
 		}
 	}
 
-	pub fn emit_body_node (&mut self, fstate: &mut LLVMFunctionState<'a>, ir_idx: usize, ir: &Ir) -> Option<Value> {
+	pub fn emit_body_node (&mut self, fstate: &mut EmitterFunctionState<'a>, ir_idx: usize, ir: &Ir) -> Option<Value> {
 		match &ir.data {
 			IrData::Phi(_) => unreachable!(),
 
@@ -541,6 +544,8 @@ impl<'a> LLVMBackend<'a> {
 				let ty = self.ctx.tys.get(*ty_key).unwrap();
 				let llty = self.emit_ty(*ty_key);
 
+				let name = ir.name.as_deref().map(LLVMString::from);
+
 				let llval = match aggregate_data {
 					AggregateData::Uninitialized => LLVMValue::undef(llty),
 
@@ -554,12 +559,12 @@ impl<'a> LLVMBackend<'a> {
 						match &ty.data {
 							TyData::Array { length, element_ty } => {
 								assert_eq!(self.emit_ty(*element_ty), elem.lltype);
-								self.ll.fill_agg(out, elem.llvalue, *length)
+								self.ll.fill_agg(out, elem.llvalue, *length, name.as_ref())
 							}
 
 							TyData::Structure { field_tys } => {
 								field_tys.iter().for_each(|x| assert_eq!(self.emit_ty(*x), elem.lltype));
-								self.ll.fill_agg(out, elem.llvalue, field_tys.len() as u32)
+								self.ll.fill_agg(out, elem.llvalue, field_tys.len() as u32, name.as_ref())
 							}
 
 							_ => unreachable!()
@@ -580,6 +585,8 @@ impl<'a> LLVMBackend<'a> {
 									assert_eq!(elem_llty, elem.lltype);
 
 									out = self.ll.insert_value(out, elem.llvalue, i);
+
+									if let Some(name) = name.as_ref() { out.set_name(name) }
 								}
 							}
 
@@ -592,6 +599,8 @@ impl<'a> LLVMBackend<'a> {
 									assert_eq!(field_llty, elem.lltype);
 
 									out = self.ll.insert_value(out, elem.llvalue, i);
+
+									if let Some(name) = name.as_ref() { out.set_name(name) }
 								}
 							}
 
@@ -612,6 +621,8 @@ impl<'a> LLVMBackend<'a> {
 									assert_eq!(elem.lltype, elem_llty);
 
 									out = self.ll.insert_value(out, elem.llvalue, i);
+
+									if let Some(name) = name.as_ref() { out.set_name(name) }
 								}
 							}
 
@@ -623,6 +634,8 @@ impl<'a> LLVMBackend<'a> {
 									assert_eq!(elem.lltype, field_llty);
 
 									out = self.ll.insert_value(out, elem.llvalue, i as u32);
+
+									if let Some(name) = name.as_ref() { out.set_name(name) }
 								}
 							}
 
@@ -633,12 +646,60 @@ impl<'a> LLVMBackend<'a> {
 					},
 				};
 
+				let ty_key = self.ir_ty(fstate, ir_idx);
+				fstate.stack.push(Value::source(llval, llty, ir_idx, ty_key))
+			}
+
+			IrData::SetElement(idx) => {
+				let elem = fstate.stack.pop().unwrap();
+
+				let agg = fstate.stack.pop().unwrap();
+				match agg.lltype.kind() {
+					LLVMStructTypeKind => {
+						assert!(agg.lltype.count_element_types() > *idx);
+						assert!(agg.lltype.get_type_at_index(*idx) == elem.lltype);
+					}
+					LLVMArrayTypeKind => {
+						assert!(agg.lltype.get_array_length() > *idx);
+						assert!(agg.lltype.get_element_type() == elem.lltype);
+					}
+					_ => unreachable!()
+				}
+
+				let llvalue = self.ll.insert_value(agg.llvalue, elem.llvalue, *idx);
+
 				if let Some(name) = ir.name.as_deref() {
-					llval.set_name(LLVMString::from(name));
+					llvalue.set_name(LLVMString::from(name));
 				}
 
 				let ty_key = self.ir_ty(fstate, ir_idx);
-				fstate.stack.push(Value::source(llval, llty, ir_idx, ty_key))
+				fstate.stack.push(Value::source(llvalue, agg.lltype, ir_idx, ty_key))
+			}
+
+			IrData::GetElement(idx) => {
+				let agg = fstate.stack.pop().unwrap();
+
+				let llelem_ty = match agg.lltype.kind() {
+					LLVMStructTypeKind => {
+						assert!(agg.lltype.count_element_types() > *idx);
+						agg.lltype.get_type_at_index(*idx)
+					}
+					LLVMArrayTypeKind => {
+						assert!(agg.lltype.get_array_length() > *idx);
+						agg.lltype.get_element_type()
+					}
+					_ => unreachable!()
+				};
+
+				let llvalue = self.ll.extract_value(agg.llvalue, *idx);
+
+				if let Some(name) = ir.name.as_deref() {
+					llvalue.set_name(LLVMString::from(name));
+				}
+
+				let ty_key = self.ir_ty(fstate, ir_idx);
+
+				fstate.stack.push(Value::source(llvalue, llelem_ty, ir_idx, ty_key))
 			}
 
 
@@ -816,27 +877,22 @@ impl<'a> LLVMBackend<'a> {
 				}
 			}
 
-			IrData::Duplicate => {
-				// dbg!("duplicate");
+			IrData::Duplicate(duplicate_idx) => {
+				// dbg!(duplicate_idx);
 
-				let val = *fstate.stack.peek().unwrap();
-
-				fstate.stack.push(val);
+				assert!(fstate.stack.duplicate(*duplicate_idx as usize))
 			}
 
-			IrData::Discard => {
-				// dbg!("discard");
+			IrData::Discard(discard_idx) => {
+				// dbg!(discard_idx);
 
-				fstate.stack.pop();
+				assert!(fstate.stack.discard(*discard_idx as usize))
 			}
 
-			IrData::Swap => {
-				// dbg!("swap");
+			IrData::Swap(swap_idx) => {
+				// dbg!(swap_idx);
 
-				let a = fstate.stack.pop().unwrap();
-				let b = fstate.stack.pop().unwrap();
-				fstate.stack.push(b);
-				fstate.stack.push(a);
+				assert!(fstate.stack.swap(*swap_idx as usize))
 			}
 
 
@@ -852,7 +908,7 @@ impl<'a> LLVMBackend<'a> {
 		None
 	}
 
-	pub fn emit_terminator_node (&mut self, fstate: &mut LLVMFunctionState, in_val_map: &HashMap<BlockKey, Stack<Value>>, mut out_vals: Stack<Value>) {
+	pub fn emit_terminator_node (&mut self, fstate: &mut EmitterFunctionState, in_val_map: &HashMap<BlockKey, Stack<Value>>, mut out_vals: Stack<Value>) {
 		let block = fstate.func.block_data.get(fstate.block_key).unwrap();
 		self.position_at_end(fstate.llblock);
 
@@ -943,6 +999,8 @@ impl<'a> LLVMBackend<'a> {
 			| IrData::Phi { .. }
 			| IrData::Constant { .. }
 			| IrData::BuildAggregate { .. }
+			| IrData::SetElement { .. }
+			| IrData::GetElement { .. }
 			| IrData::GlobalRef { .. }
 			| IrData::FunctionRef { .. }
 			| IrData::BlockRef { .. }
@@ -955,15 +1013,15 @@ impl<'a> LLVMBackend<'a> {
 			| IrData::Load
 			| IrData::Store
 			| IrData::Call
-			| IrData::Duplicate
-			| IrData::Discard
-			| IrData::Swap
+			| IrData::Duplicate { .. }
+			| IrData::Discard { .. }
+			| IrData::Swap { .. }
 			=> unreachable!()
 		}
 	}
 
 
-	pub fn emit_entry (&mut self, fstate: &mut LLVMFunctionState) -> LLVMBlock {
+	pub fn emit_entry (&mut self, fstate: &mut EmitterFunctionState) -> LLVMBlock {
 		let lltype = self.emit_ty(fstate.func.ty);
 		let abi = self.abi_info(lltype);
 
@@ -1039,7 +1097,7 @@ impl<'a> LLVMBackend<'a> {
 	}
 
 
-	pub fn emit_return (&mut self, fstate: &mut LLVMFunctionState, mut stack: Stack<Value>) -> LLVMValue {
+	pub fn emit_return (&mut self, fstate: &mut EmitterFunctionState, mut stack: Stack<Value>) -> LLVMValue {
 		let lltype = self.emit_ty(fstate.func.ty);
 		let abi = self.abi_info(lltype);
 
@@ -1090,7 +1148,7 @@ impl<'a> LLVMBackend<'a> {
 
 
 
-	pub fn emit_call (&mut self, fstate: &mut LLVMFunctionState<'a>) -> Option<(LLVMValue, LLVMType)> {
+	pub fn emit_call (&mut self, fstate: &mut EmitterFunctionState<'a>) -> Option<(LLVMValue, LLVMType)> {
 		let Value { llvalue, mut lltype, .. } = fstate.stack.pop().unwrap();
 
 		if lltype.is_pointer_kind() { lltype = lltype.get_element_type() }

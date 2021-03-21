@@ -27,20 +27,28 @@ impl<T> Stack<T> {
 	}
 
 
+	fn reverse_index (&self, i: usize) -> Option<usize> {
+		if self.len() > i { Some(self.len() - (i + 1)) }
+		else { None }
+	}
+
+
 	pub fn peek_at (&self, offset: usize) -> Option<&T> {
-		if self.len() <= offset { return None }
+		let index = self.reverse_index(offset)?;
 
-		let index = self.len() - (offset + 1);
-
-		self.items.get(index)
+		Some(unsafe { self.items.get_unchecked(index) })
 	}
 
 	pub fn peek_at_mut (&mut self, offset: usize) -> Option<&mut T> {
-		if self.len() <= offset { return None }
+		let index = self.reverse_index(offset)?;
 
-		let index = self.len() - (offset + 1);
+		Some(unsafe { self.items.get_unchecked_mut(index) })
+	}
 
-		self.items.get_mut(index)
+	unsafe fn peek_at_mut_ptr (&mut self, offset: usize) -> Option<*mut T> {
+		let index = self.reverse_index(offset)?;
+
+		Some(self.items.as_mut_ptr().add(index))
 	}
 
 	pub fn peek (&self) -> Option<&T> {
@@ -84,12 +92,32 @@ impl<T> Stack<T> {
 		self.items.as_mut_slice()
 	}
 
-	pub fn duplicate (&mut self) -> bool
+	pub fn duplicate (&mut self, at: usize) -> bool
 	where T: Clone
 	{
-		if let Some(top) = self.peek() {
-			let top = top.clone();
-			self.push(top);
+		if let Some(entry) = self.peek_at(at) {
+			let entry = entry.clone();
+			self.push(entry);
+			true
+		} else {
+			false
+		}
+	}
+
+	pub fn swap (&mut self, at: usize) -> bool {
+		if at == 0 { return true }
+
+		if let (Some(a), Some(b)) = unsafe { (self.peek_at_mut_ptr(at), self.peek_at_mut_ptr(0)) } {
+			unsafe { std::ptr::swap(a, b) }
+			true
+		} else {
+			false
+		}
+	}
+
+	pub fn discard (&mut self, at: usize) -> bool {
+		if let Some(idx) = self.reverse_index(at) {
+			self.items.remove(idx);
 			true
 		} else {
 			false

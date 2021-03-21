@@ -98,8 +98,24 @@ impl OpStack {
 			.is_some()
 	}
 
-	pub fn duplicate (&mut self) -> IrDataResult {
-		if self.entries.duplicate() {
+	pub fn duplicate (&mut self, at: usize) -> IrDataResult {
+		if self.entries.duplicate(at) {
+			Ok(())
+		} else {
+			Err(TyErr::StackUnderflow.into())
+		}
+	}
+
+	pub fn swap (&mut self, at: usize) -> IrDataResult {
+		if self.entries.swap(at) {
+			Ok(())
+		} else {
+			Err(TyErr::StackUnderflow.into())
+		}
+	}
+
+	pub fn discard (&mut self, at: usize) -> IrDataResult {
+		if self.entries.discard(at) {
 			Ok(())
 		} else {
 			Err(TyErr::StackUnderflow.into())
@@ -140,12 +156,25 @@ pub struct TyMap {
 }
 
 impl TyMap {
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub(crate) fn set (&mut self, block_key: impl AsKey<BlockKey>, index: usize, ty_key: impl AsKey<TyKey>) {
-		assert!(self.data.insert((block_key.as_key(), index), ty_key.as_key()).is_none())
+		assert!(self.data.insert((block_key.as_key(), index), ty_key.as_key()).is_none());
 	}
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get (&self, block_key: BlockKey, index: usize) -> TyKey {
-		*self.data.get(&(block_key, index)).unwrap()
+		let x = self.data.get(&(block_key, index)).copied();
+
+		if cfg!(debug_assertions) {
+			match x {
+				Some(tk) => tk,
+				None => {
+					panic!("Cannot get validator type for {:?} : {}\n from {:#?}", block_key, index, self.data);
+				}
+			}
+		} else {
+			x.unwrap()
+		}
 	}
 }
 
@@ -215,16 +244,12 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 	}
 
 
-	pub fn validate_aggregate_index (&self, ty: Keyed<Ty>, idx: u32) -> TyResult {
-		if match &ty.data {
-			TyData::Array { length, .. } => idx < *length,
-			TyData::Structure { field_tys } => field_tys.get(idx as usize).is_some(),
+	pub fn validate_aggregate_index (&self, ty: Keyed<Ty>, idx: u32) -> TyResult<TyKey> {
+		match &ty.data {
+			TyData::Array { length, element_ty } => if idx < *length { Some(*element_ty) } else { None },
+			TyData::Structure { field_tys } => field_tys.get(idx as usize).copied(),
 			_ => return Err(TyErr::ExpectedAggregateTy(ty.as_key()))
-		} {
-			Ok(())
-		} else {
-			Err(TyErr::InvalidAggregateIndex(ty.as_key(), idx))
-		}
+		}.ok_or_else(|| TyErr::InvalidAggregateIndex(ty.as_key(), idx))
 	}
 
 	pub fn validate_aggregate_element<K: AsKey<TyKey>> (&self, ty: Keyed<Ty>, idx: u32, ty_key: K) -> TyResult {
@@ -626,6 +651,30 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 				self.stack.push(ty)
 			}
 
+			SetElement(index) => {
+				let elem = self.stack.pop()?;
+
+				let agg = self.stack.pop()?;
+				let agg_ty = self.builder.get_ty(agg)?;
+
+				self.validate_aggregate_element(agg_ty, *index, elem)?;
+
+				self.ty_map.set(parent.as_key(), node_idx, agg_ty);
+
+				self.stack.push(agg)
+			}
+
+			GetElement(index) => {
+				let agg = self.stack.pop()?;
+				let agg_ty = self.builder.get_ty(agg)?;
+
+				let elem = self.validate_aggregate_index(agg_ty, *index)?;
+
+				self.ty_map.set(parent.as_key(), node_idx, elem);
+
+				self.stack.push(elem)
+			}
+
 			GlobalRef(global_key)
 			=> {
 				let global = self.builder.get_global(global_key)?;
@@ -882,25 +931,21 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			}
 
 
-			Duplicate
+			Duplicate(idx)
 			=> {
-				self.stack.duplicate()?;
+				self.stack.duplicate(*idx as usize)?;
 				if let Ok(cur) = self.stack.peek_at(0) { self.ty_map.set(parent.as_key(), node_idx, cur); }
 			}
 
-			Discard
+			Discard(idx)
 			=> {
-				self.stack.pop()?;
+				self.stack.discard(*idx as usize)?;
 				if let Ok(cur) = self.stack.peek_at(0) { self.ty_map.set(parent.as_key(), node_idx, cur); }
 			}
 
-			Swap
+			Swap(idx)
 			=> {
-				let a = self.stack.pop()?;
-				let b = self.stack.pop()?;
-				self.stack.push(a);
-				self.stack.push(b);
-
+				self.stack.swap(*idx as usize)?;
 				if let Ok(cur) = self.stack.peek_at(0) { self.ty_map.set(parent.as_key(), node_idx, cur); }
 			}
 

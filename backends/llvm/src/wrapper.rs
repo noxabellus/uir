@@ -198,6 +198,12 @@ impl<'a> ToLLVMText for [i8] {
 }
 
 
+impl<'a> ToLLVMText for &LLVMString {
+	fn to_lltext (&self) -> *const i8 {
+		self.as_ptr()
+	}
+}
+
 impl<'a> ToLLVMText for &'a LLVMStr {
 	fn to_lltext (&self) -> *const i8 {
 		(*self).to_lltext()
@@ -973,6 +979,10 @@ impl LLVMValue {
 		self
 	}
 
+	pub fn get_global_parent (self) -> LLVMModuleRef {
+		assert!(self.is_global_variable_node() || self.is_function_node());
+		unsafe { LLVMGetGlobalParent(self.into()) }
+	}
 
 	// pub fn const_structure (ty: LLVMType) -> LLVMValue {
 	// 	unsafe { LLVMConstNamedStruct(ty.into(), ).into() }
@@ -1317,9 +1327,10 @@ impl LLVM {
 
 
 
-	pub fn fill_agg (&self, mut agg: LLVMValue, value: LLVMValue, len: u32) -> LLVMValue {
+	pub fn fill_agg<T: ToLLVMText + Copy> (&self, mut agg: LLVMValue, value: LLVMValue, len: u32, name: Option<T>) -> LLVMValue {
 		for i in 0..len {
 			agg = self.insert_value(agg, value, i);
+			if let Some(name) = name { agg.set_name(name) }
 		}
 
 		agg

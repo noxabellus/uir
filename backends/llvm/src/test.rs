@@ -1,12 +1,11 @@
 use llvm_sys::analysis::{LLVMVerifierFailureAction::*};
 
 use {
-	std::{
-		sync::atomic::{ Ordering, AtomicBool },
-		io::Write,
-		path::PathBuf,
-		fs::create_dir_all,
-	},
+	// std::{
+	// 	sync::atomic::{ Ordering, AtomicBool },
+	// 	path::PathBuf,
+	// 	fs::create_dir_all,
+	// },
 	uir_core::{
 		support::slotmap::*,
 		ir::*,
@@ -15,36 +14,180 @@ use {
 		printer::*,
 		target,
 		block,
+		with_block,
+		structure_ty,
+		aggregate_const,
 	},
 	BinaryOp::*,
 	crate::{
-		LLVMBackend,
+		Emitter,
+		Optimizer,
 		wrapper::*,
 	},
 };
 
 
-fn get_log_path (file: &str) -> PathBuf {
-	static X: AtomicBool = AtomicBool::new(false);
+// fn get_log_path (file: &str) -> PathBuf {
+// 	static X: AtomicBool = AtomicBool::new(false);
 
-	let mut path: PathBuf = [ "..", "..", "local", "log" ].iter().collect();
+// 	let mut path: PathBuf = [ "..", "..", "local", "log" ].iter().collect();
 
-	if !X.load(Ordering::Relaxed) {
-		create_dir_all(&path).unwrap();
-		X.store(true, Ordering::Relaxed);
-	}
+// 	if !X.load(Ordering::Relaxed) {
+// 		create_dir_all(&path).unwrap();
+// 		X.store(true, Ordering::Relaxed);
+// 	}
 
-	path.push(file);
+// 	path.push(file);
 
-	path
+// 	path
+// }
+
+#[test]
+fn get_set_element () {
+	let mut context = Context::with_target(target::AMD64);
+	let mut builder = Builder::new(&mut context);
+	let mut f = FunctionBuilder::new(&mut builder);
+
+	let r32 = f.real32_ty().as_key();
+
+	let v2f = structure_ty!(f, v2f {
+		r32, r32,
+	}).as_key();
+
+	f.set_name("v2f_mul");
+
+	let a = f.append_param(v2f).set_name("a").as_key();
+	let b = f.append_param(v2f).set_name("b").as_key();
+
+	f.set_return_ty(v2f);
+
+	block!(f, entry {
+		f.constant(Constant::Aggregate(v2f, ConstantAggregateData::Zeroed));
+
+		f.param_ref(a);
+		f.load();
+		f.duplicate(0);
+
+		f.get_element(0).set_name("a.0");
+
+		f.param_ref(b);
+		f.load();
+		f.duplicate(0);
+
+		f.get_element(0).set_name("b.0");
+		f.swap(1);
+		f.swap(2);
+		f.swap(1);
+
+		f.binary_op(Add).set_name("a.0+b.0");
+		f.swap(1);
+		f.swap(3);
+		f.swap(1);
+
+		f.set_element(0).set_name("ret_val");
+		f.swap(2);
+		f.swap(1);
+
+		f.get_element(1).set_name("a.1");
+		f.swap(1);
+		f.get_element(1).set_name("b.1");
+		f.binary_op(Add).set_name("a.1+b.1");
+
+		f.set_element(1).set_name("ret_val");
+
+		f.ret();
+	});
+
+	let function = f.finalize().map(FunctionManipulator::into_key).unwrap_rich(&context);
+
+	let pstate = PrinterState::new(&context);
+	println!("{}\n{}", pstate.print_ty(v2f), pstate.print_function(function));
+
+	let mut emitter = Emitter::new(&context).unwrap();
+	let llv2f = emitter.emit_ty(v2f);
+	let llfunction = emitter.emit_function(function);
+
+	println!("{:#?}\n{:#?}", llv2f, llfunction);
+
+	llfunction.verify_function(LLVMAbortProcessAction);
 }
+
+
+#[test]
+fn optimize_get_set_element () {
+	let mut context = Context::with_target(target::AMD64);
+	let mut builder = Builder::new(&mut context);
+	let mut f = FunctionBuilder::new(&mut builder);
+
+	let r32 = f.real32_ty().as_key();
+
+	let v2f = structure_ty!(f, v2f {
+		r32, r32,
+	}).as_key();
+
+	f.set_name("v2f_mul");
+
+	let a = f.append_param(v2f).set_name("a").as_key();
+	let b = f.append_param(v2f).set_name("b").as_key();
+
+	f.set_return_ty(v2f);
+
+	block!(f, entry {
+		f.constant(Constant::Aggregate(v2f, ConstantAggregateData::Zeroed));
+
+		f.param_ref(a);
+		f.load();
+		f.duplicate(0);
+
+		f.get_element(0).set_name("a.0");
+
+		f.param_ref(b);
+		f.load();
+		f.duplicate(0);
+
+		f.get_element(0).set_name("b.0");
+		f.swap(1);
+		f.swap(2);
+		f.swap(1);
+
+		f.binary_op(Add).set_name("a.0+b.0");
+		f.swap(1);
+		f.swap(3);
+		f.swap(1);
+
+		f.set_element(0).set_name("ret_val");
+		f.swap(2);
+		f.swap(1);
+
+		f.get_element(1).set_name("a.1");
+		f.swap(1);
+		f.get_element(1).set_name("b.1");
+		f.binary_op(Add).set_name("a.1+b.1");
+
+		f.set_element(1).set_name("ret_val");
+
+		f.ret();
+	});
+
+	let function = f.finalize().map(FunctionManipulator::into_key).unwrap_rich(&context);
+
+	let pstate = PrinterState::new(&context);
+	println!("{}\n{}", pstate.print_ty(v2f), pstate.print_function(function));
+
+	let mut emitter = Emitter::new(&context).unwrap();
+	let llv2f = emitter.emit_ty(v2f);
+	let llfunction = emitter.emit_function(function);
+	println!("{:#?}\n{:#?}", llv2f, llfunction);
+	llfunction.verify_function(LLVMAbortProcessAction);
+
+	let mut optimizer = Optimizer::with_level(&mut emitter, 3);
+	assert!(optimizer.optimize(llfunction), "failed to optimize");
+	println!("optimized ir:\n{:#?}", llfunction);
+}
+
 
 #[test]
 fn fib () -> IrResult {
-	let ir_path = get_log_path("fib.ir");
-	let llpath = get_log_path("fib.ll");
-
-
 	let mut context = Context::with_target(target::AMD64);
 	let mut builder = Builder::new(&mut context);
 	let mut f = FunctionBuilder::new(&mut builder);
@@ -64,7 +207,7 @@ fn fib () -> IrResult {
 	let recurse = f.append_new_block().set_name("recurse").as_key();
 	let end = f.append_new_block().set_name("end").as_key();
 
-	block!(f, entry => {
+	with_block!(f, entry => {
 		f.param_ref(n);
 		f.load();
 		f.const_sint32(2);
@@ -74,14 +217,14 @@ fn fib () -> IrResult {
 		f.cond_branch(use_n, recurse);
 	});
 
-	block!(f, use_n => {
+	with_block!(f, use_n => {
 		f.param_ref(n);
 		f.load();
 
 		f.branch(end);
 	});
 
-	block!(f, recurse => {
+	with_block!(f, recurse => {
 		f.param_ref(n);
 		f.load();
 		f.const_sint32(1);
@@ -105,63 +248,111 @@ fn fib () -> IrResult {
 		f.branch(end);
 	});
 
-	block!(f, end => {
+	with_block!(f, end => {
 		f.phi(s32t)
 		 .set_name("result");
 
 		f.ret();
 	});
 
-	let BuilderResult { value: function, error } = f.finalize();
-	let function = function.as_key();
-
-	let ir_src = std::fs::File::create(ir_path).unwrap();
-	write!(&ir_src, "{}", PrinterState::new(&context).with_possible_error(error).print_function(function)).unwrap();
+	let function = f.finalize().map(FunctionManipulator::into_key).unwrap_rich(&context);
+	println!("{}", PrinterState::new(&context).print_function(function));
 
 
+	let mut emitter = Emitter::new(&context).unwrap();
+	let llfunc = emitter.emit_function(function);
+	println!("{:?}", llfunc);
 
-	let mut backend = LLVMBackend::new(&context).unwrap();
-	let llfunc = backend.emit_function(function);
 	llfunc.verify_function(LLVMAbortProcessAction);
-
-	let llsrc = std::fs::File::create(llpath).unwrap();
-	write!(&llsrc, "{:?}", llfunc).unwrap();
 
 
 	Ok(())
 }
 
 
-macro_rules! structure_ty {
-	($b:expr, $name:expr => { $( $field_ty:expr ),* }) => { {
-		let s = $b.empty_structure_ty().set_name($name).as_key();
-		let body = vec![
-			$( $field_ty.as_key() ),*
-		];
-		$b.set_structure_ty_body(s, body).unwrap()
-	} };
-}
+#[test]
+fn optimize_fib () -> IrResult {
+	let mut context = Context::with_target(target::AMD64);
+	let mut builder = Builder::new(&mut context);
+	let mut f = FunctionBuilder::new(&mut builder);
 
-macro_rules! structure_const {
-	($ty:expr => $kind:ident $( $( $tt:tt )+ )?) => {
-		Constant::Aggregate($ty.as_key(), ConstantAggregateData::$kind $( ( structure_const!(%BODY% $( $tt )+) ) )?)
-	};
+	let fib = f.get_own_function().as_key();
 
-	(%BODY% { $( $index:expr => $value:expr ),+ $(,)? }) => {
-		vec![
-			$( ($index, $value.into()) ),+
-		]
-	};
+	f.set_name("fib");
 
-	(%BODY% { $( $value:expr ),+ $(,)? }) => {
-		vec![
-			$( $value.into() ),+
-		]
-	};
+	let s32t = f.sint32_ty().as_key();
 
-	(%BODY% $value:expr) => {
-		Box::new($value.into())
-	};
+	let n = f.append_param(s32t).set_name("n").as_key();
+
+	f.set_return_ty(s32t);
+
+	let entry = f.append_new_block().set_name("entry").as_key();
+	let use_n = f.append_new_block().set_name("use_n").as_key();
+	let recurse = f.append_new_block().set_name("recurse").as_key();
+	let end = f.append_new_block().set_name("end").as_key();
+
+	with_block!(f, entry => {
+		f.param_ref(n);
+		f.load();
+		f.const_sint32(2);
+		f.binary_op(Lt)
+		 .set_name("predicate");
+
+		f.cond_branch(use_n, recurse);
+	});
+
+	with_block!(f, use_n => {
+		f.param_ref(n);
+		f.load();
+
+		f.branch(end);
+	});
+
+	with_block!(f, recurse => {
+		f.param_ref(n);
+		f.load();
+		f.const_sint32(1);
+		f.binary_op(Sub)
+		 .set_name("n-1");
+		f.function_ref(fib);
+		f.call()
+		 .set_name("fib_n-1");
+
+		f.param_ref(n);
+		f.load();
+		f.const_sint32(2);
+		f.binary_op(Sub)
+		 .set_name("n-2");
+		f.function_ref(fib);
+		f.call()
+		 .set_name("fib_n-2");
+
+		f.binary_op(Add);
+
+		f.branch(end);
+	});
+
+	with_block!(f, end => {
+		f.phi(s32t)
+		 .set_name("result");
+
+		f.ret();
+	});
+
+	let function = f.finalize().map(FunctionManipulator::into_key).unwrap_rich(&context);
+	println!("{}", PrinterState::new(&context).print_function(function));
+
+
+	let mut emitter = Emitter::new(&context).unwrap();
+	let llfunction = emitter.emit_function(function);
+	println!("{:?}", llfunction);
+	llfunction.verify_function(LLVMAbortProcessAction);
+
+	let mut optimizer = Optimizer::with_level(&mut emitter, 3);
+	assert!(optimizer.optimize(llfunction), "failed to optimize");
+	println!("optimized ir:\n{:#?}", llfunction);
+
+	Ok(())
 }
 
 
@@ -235,54 +426,54 @@ fn structures () {
 	}).as_key();
 
 
-	let const_s32x2 = structure_const!(s32x2 => Complete {
+	let const_s32x2 = aggregate_const!(s32x2 => Complete {
 		1i32, 2i32,
 	});
 
-	let const_s32x4 = structure_const!(s32x4 => Complete {
+	let const_s32x4 = aggregate_const!(s32x4 => Complete {
 		1i32, 3i32, 3i32, 7i32,
 	});
 
-	let const_s32x8 = structure_const!(s32x8 => Complete {
+	let const_s32x8 = aggregate_const!(s32x8 => Complete {
 		4i32, 3i32, 2i32, 1i32, 9i32, 8i32, 7i32, 6i32,
 	});
 
 
-	let const_s64x2 = structure_const!(s64x2 => Complete {
+	let const_s64x2 = aggregate_const!(s64x2 => Complete {
 		1i64, 2i64,
 	});
 
-	let const_s64x4 = structure_const!(s64x4 => Complete {
+	let const_s64x4 = aggregate_const!(s64x4 => Complete {
 		1i64, 3i64, 3i64, 7i64,
 	});
 
-	let const_s64x8 = structure_const!(s64x8 => Complete {
+	let const_s64x8 = aggregate_const!(s64x8 => Complete {
 		4i64, 3i64, 2i64, 1i64, 9i64, 8i64, 7i64, 6i64,
 	});
 
 
-	let const_r32x2 = structure_const!(r32x2 => Complete {
+	let const_r32x2 = aggregate_const!(r32x2 => Complete {
 		1f32, 2f32,
 	});
 
-	let const_r32x4 = structure_const!(r32x4 => Complete {
+	let const_r32x4 = aggregate_const!(r32x4 => Complete {
 		1f32, 3f32, 3f32, 7f32,
 	});
 
-	let const_r32x8 = structure_const!(r32x8 => Complete {
+	let const_r32x8 = aggregate_const!(r32x8 => Complete {
 		4f32, 3f32, 2f32, 1f32, 9f32, 8f32, 7f32, 6f32,
 	});
 
 
-	let const_r64x2 = structure_const!(r64x2 => Complete {
+	let const_r64x2 = aggregate_const!(r64x2 => Complete {
 		1f64, 2f64,
 	});
 
-	let const_r64x4 = structure_const!(r64x4 => Complete {
+	let const_r64x4 = aggregate_const!(r64x4 => Complete {
 		1f64, 3f64, 3f64, 7f64,
 	});
 
-	let const_r64x8 = structure_const!(r64x8 => Complete {
+	let const_r64x8 = aggregate_const!(r64x8 => Complete {
 		4f64, 3f64, 2f64, 1f64, 9f64, 8f64, 7f64, 6f64,
 	});
 
@@ -307,26 +498,26 @@ fn structures () {
 	println!("{}", PrinterState::new(&builder.ctx).print_self());
 
 	{
-		let mut backend = LLVMBackend::new(&builder.ctx).unwrap();
+		let mut emitter = Emitter::new(&builder.ctx).unwrap();
 
-		backend.emit_global(global_s32x2);
-		backend.emit_global(global_s32x4);
-		backend.emit_global(global_s32x8);
+		emitter.emit_global(global_s32x2);
+		emitter.emit_global(global_s32x4);
+		emitter.emit_global(global_s32x8);
 
-		backend.emit_global(global_s64x2);
-		backend.emit_global(global_s64x4);
-		backend.emit_global(global_s64x8);
+		emitter.emit_global(global_s64x2);
+		emitter.emit_global(global_s64x4);
+		emitter.emit_global(global_s64x8);
 
-		backend.emit_global(global_r32x2);
-		backend.emit_global(global_r32x4);
-		backend.emit_global(global_r32x8);
+		emitter.emit_global(global_r32x2);
+		emitter.emit_global(global_r32x4);
+		emitter.emit_global(global_r32x8);
 
-		backend.emit_global(global_r64x2);
-		backend.emit_global(global_r64x4);
-		backend.emit_global(global_r64x8);
+		emitter.emit_global(global_r64x2);
+		emitter.emit_global(global_r64x4);
+		emitter.emit_global(global_r64x8);
 
 		// let llsrc = std::fs::File::create(llpath).unwrap();
-		println!( "{}", backend.ll);
+		println!( "{}", emitter.ll);
 	}
 
 
@@ -365,10 +556,10 @@ fn structures () {
 
 		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
 
-		let mut backend = LLVMBackend::new(&builder.ctx).unwrap();
-		let llfunction = backend.emit_function(function);
+		let mut emitter = Emitter::new(&builder.ctx).unwrap();
+		let llfunction = emitter.emit_function(function);
 
-		println!("{:#?}\n{:#?}", backend.emit_ty(ty), llfunction);
+		println!("{:#?}\n{:#?}", emitter.emit_ty(ty), llfunction);
 
 		llfunction.verify_function(LLVMAbortProcessAction);
 	}
@@ -420,10 +611,10 @@ fn structures () {
 
 		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
 
-		let mut backend = LLVMBackend::new(&builder.ctx).unwrap();
-		let llfunction = backend.emit_function(function);
+		let mut emitter = Emitter::new(&builder.ctx).unwrap();
+		let llfunction = emitter.emit_function(function);
 
-		println!("{:#?}\n{:#?}", backend.emit_ty(ty), llfunction);
+		println!("{:#?}\n{:#?}", emitter.emit_ty(ty), llfunction);
 
 		llfunction.verify_function(LLVMAbortProcessAction);
 	}
@@ -489,14 +680,14 @@ typedef unsigned long uint64_ty;
 				let struct_ty = builder.structure_ty(tys.to_vec()).unwrap().set_name(stringify!($name)).as_key();
 
 				let struct_function_ty = builder.function_ty(vec! [ struct_ty ], Some(struct_ty)).unwrap().as_key();
-				let mut backend = LLVMBackend::new(&ctx).unwrap();
+				let mut emitter = Emitter::new(&ctx).unwrap();
 
-				let ll_struct_function_user_ty = backend.emit_ty(struct_function_ty);
-				let struct_function_abi = backend.abi_info(ll_struct_function_user_ty);
+				let ll_struct_function_user_ty = emitter.emit_ty(struct_function_ty);
+				let struct_function_abi = emitter.abi_info(ll_struct_function_user_ty);
 				let ll_struct_function_ty = struct_function_abi.lltype;
 
-				let ll_struct_function = LLVMValue::create_function(backend.module, ll_struct_function_ty, llvm_str!(concat!("fn_struct_", stringify!($name))));
-				struct_function_abi.apply_attributes(backend.ll.ctx, ll_struct_function);
+				let ll_struct_function = LLVMValue::create_function(emitter.module, ll_struct_function_ty, llvm_str!(concat!("fn_struct_", stringify!($name))));
+				struct_function_abi.apply_attributes(emitter.ll.ctx, ll_struct_function);
 
 				let ll_mod = llvm_from_c(build_c_abi_str!($name ($( $field_name : $field_ty ),*)));
 
