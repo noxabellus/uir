@@ -20,12 +20,34 @@ mod test {
 	use support::slotmap::*;
 	use super::{
 		ir::*,
+		ty::*,
 		builder::*,
 		target,
 		block,
 		printer::PrinterState,
 	};
 	use BinaryOp::*;
+
+	#[test]
+	fn reject_infinite_structures () {
+		let mut context = Context::with_target(target::AMD64);
+		let mut builder = Builder::new(&mut context);
+
+		let root = builder.empty_structure_ty().as_key();
+		builder.set_structure_ty_body(root, vec! [ root ]).unwrap();
+		let result = builder.validate_tys();
+		let pstate = PrinterState::new(builder.ctx);
+		match result {
+			Ok(_)
+			=> panic!("Validator failed to reject infinite structure:\n{}", pstate.print_ty(root)),
+
+			Err(x @ IrErr { data: IrErrData::TyErr(TyErr::InfiniteRecursive(_)), .. })
+			=> { println!("validator successfully rejected infinite structure:\n{}", pstate.with_error(x).print_ty(root))},
+
+			Err(x)
+			=> panic!("unexpected error from validator on infinite structure (expected TyErr::InfiniteRecursive):\n{}", pstate.with_error(x).print_ty(root))
+		}
+	}
 
 	#[test]
 	fn add () -> IrResult {
@@ -60,7 +82,7 @@ mod test {
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("add.ir");
-		let output = format!("{}", PrinterState::new(&context).with_error(error).print_self());
+		let output = format!("{}", PrinterState::new(&context).with_possible_error(error).print_self());
 		write(&path, &output).unwrap();
 		println!("{}", &output);
 
@@ -141,7 +163,7 @@ mod test {
 		let mut path: PathBuf = [ "..", "local", "log" ].iter().collect();
 		create_dir_all(&path).unwrap();
 		path.push("fib.ir");
-		let output = format!("{}", PrinterState::new(&context).with_error(error).print_function(function));
+		let output = format!("{}", PrinterState::new(&context).with_possible_error(error).print_function(function));
 		write(&path, &output).unwrap();
 		println!("{}", &output);
 

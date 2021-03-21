@@ -116,7 +116,7 @@ fn fib () -> IrResult {
 	let function = function.as_key();
 
 	let ir_src = std::fs::File::create(ir_path).unwrap();
-	write!(&ir_src, "{}", PrinterState::new(&context).with_error(error).print_function(function)).unwrap();
+	write!(&ir_src, "{}", PrinterState::new(&context).with_possible_error(error).print_function(function)).unwrap();
 
 
 
@@ -361,7 +361,7 @@ fn structures () {
 
 		let BuilderResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
 
-		let printer = PrinterState::new(&builder.ctx).with_error(error);
+		let printer = PrinterState::new(&builder.ctx).with_possible_error(error);
 
 		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
 
@@ -416,7 +416,7 @@ fn structures () {
 
 		let BuilderResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
 
-		let printer = PrinterState::new(&builder.ctx).with_error(error);
+		let printer = PrinterState::new(&builder.ctx).with_possible_error(error);
 
 		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
 

@@ -1,4 +1,4 @@
-use std::{cell::Ref, ops::{self, Deref}};
+use std::{cell::Ref, collections::HashSet, ops::{self, Deref}};
 
 use support::{slotmap::{AsKey, Keyed, KeyedMut}, utils::assert};
 
@@ -798,7 +798,7 @@ impl<'c, T: RichUnwrap<'c>> BuilderResult<T, IrErr> {
 	#[track_caller]
 	pub fn unwrap_rich (self, ctx: &'c Context) -> T {
 		if let Some(err) = self.error {
-			let state = PrinterState::new(ctx).with_error(Some(err));
+			let state = PrinterState::new(ctx).with_error(err);
 			panic!("Cannot unwrap BuilderResult:\n{}", self.value.print(state))
 		}
 
@@ -1018,60 +1018,70 @@ impl<'c> Builder<'c> {
 
 
 	pub fn finalize_ty<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<Ref<Layout>> {
-		use TyData::*;
+		fn finalize_ty_impl<'x> (this: &'x Builder, wip: &mut HashSet<TyKey>, ty_key: TyKey) -> IrDataResult<Ref<'x, Layout>> {
+			use TyData::*;
 
-		let ty_key = ty_key.as_key();
+			if !wip.contains(&ty_key) {
+				wip.insert(ty_key);
+			} else {
+				return Err(IrErrData::TyErr(TyErr::InfiniteRecursive(ty_key)));
+			}
 
-		let ty = self.get_ty(ty_key)?;
+			let ty = this.get_ty(ty_key)?;
 
-		if ty.layout.borrow().is_none() {
-			let layout = match &ty.data {
-				Void => Layout::custom_scalar(0, 1),
+			if ty.layout.borrow().is_none() {
+				let layout = match &ty.data {
+					Void => Layout::custom_scalar(0, 1),
 
-				&Primitive(prim) => self.ctx.target.primitive_layout(prim),
+					&Primitive(prim) => this.ctx.target.primitive_layout(prim),
 
-				Block | &Pointer { .. } | &Function { .. } => self.ctx.target.pointer_layout(),
+					Block | &Pointer { .. } | &Function { .. } => this.ctx.target.pointer_layout(),
 
-				&Array { length, element_ty } => {
-					let layout_ref = self.finalize_ty(element_ty)?;
-					let Layout { size: elem_size, align: elem_align, .. } = layout_ref.deref();
-					Layout::custom_scalar(length * *elem_size, *elem_align)
-				},
+					&Array { length, element_ty } => {
+						let layout_ref = finalize_ty_impl(this, wip, element_ty)?;
+						let Layout { size: elem_size, align: elem_align, .. } = layout_ref.deref();
+						Layout::custom_scalar(length * *elem_size, *elem_align)
+					},
 
-				Structure { field_tys } => {
-					let field_tys = field_tys.clone().into_iter();
-					let mut size = 0;
-					let mut align = 0;
+					Structure { field_tys } => {
+						let field_tys = field_tys.clone().into_iter();
+						let mut size = 0;
+						let mut align = 0;
 
-					let mut field_offsets = vec![];
+						let mut field_offsets = vec![];
 
-					for field_ty_key in field_tys {
-						let layout_ref = self.finalize_ty(field_ty_key)?;
-						let Layout { size: field_size, align: field_align, .. } = layout_ref.deref();
+						for field_ty_key in field_tys {
+							let layout_ref = finalize_ty_impl(this, wip, field_ty_key)?;
+							let Layout { size: field_size, align: field_align, .. } = layout_ref.deref();
 
-						if *field_align > align { align = *field_align }
+							if *field_align > align { align = *field_align }
 
-						let padding = (*field_align - (size % *field_align)) % *field_align;
+							let padding = (*field_align - (size % *field_align)) % *field_align;
 
-						size += padding;
+							size += padding;
 
-						field_offsets.push(size);
+							field_offsets.push(size);
 
-						size += *field_size;
+							size += *field_size;
+						}
+
+						size = if align < 2 { size } else { ((size + align - 1) / align) * align };
+
+						Layout::structure(size, align, field_offsets)
 					}
+				};
 
-					size = if align < 2 { size } else { ((size + align - 1) / align) * align };
+				this.ctx.tys.get(ty_key).unwrap().layout.borrow_mut().replace(layout);
+			}
 
-					Layout::structure(size, align, field_offsets)
-				}
-			};
+			let base = this.ctx.tys.get(ty_key).unwrap().layout.borrow();
 
-			self.ctx.tys.get(ty_key).unwrap().layout.borrow_mut().replace(layout);
+			wip.remove(&ty_key);
+
+			Ok(Ref::map(base, |opt| opt.as_ref().unwrap()))
 		}
 
-		let base = self.ctx.tys.get(ty_key).unwrap().layout.borrow();
-
-		Ok(Ref::map(base, |opt| opt.as_ref().unwrap()))
+		finalize_ty_impl(self, &mut HashSet::default(), ty_key.as_key())
 	}
 
 	pub fn size_of<K: AsKey<TyKey>> (&self, ty_key: K) -> IrDataResult<u32> {

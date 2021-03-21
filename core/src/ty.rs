@@ -42,7 +42,8 @@ pub enum TyErr {
 	BinaryOpTypeMismatch(TyKey, TyKey),
 	BinaryOpInvalidOperandTy(BinaryOp, TyKey),
 	UnaryOpInvalidOperandTy(UnaryOp, TyKey),
-	InvalidCast(CastOp, TyKey, TyKey)
+	InvalidCast(CastOp, TyKey, TyKey),
+	InfiniteRecursive(TyKey),
 }
 
 pub type TyResult<T = ()> = Result<T, TyErr>;

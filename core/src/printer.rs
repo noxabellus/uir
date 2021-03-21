@@ -88,18 +88,25 @@ impl<'c> PrinterState<'c> {
 		self
 	}
 
-	pub fn with_error (mut self, error: Option<IrErr>) -> Self {
+	pub fn with_possible_error (mut self, error: Option<IrErr>) -> Self {
 		match error {
 			None => {
 				self.clear_err_data();
 				self.clear_err_location();
+
+				self
 			}
 
-			Some(IrErr { data, location }) => {
-				self.set_err_data(data);
-				self.set_err_location(location);
+			Some(x) => {
+
+				self.with_error(x)
 			}
 		}
+	}
+
+	pub fn with_error (mut self, IrErr { data, location }: IrErr) -> Self {
+		self.set_err_data(data);
+		self.set_err_location(location);
 
 		self
 	}
@@ -1225,6 +1232,7 @@ impl<'data, 'ctx> fmt::Display for TyErrPrinter<'data, 'ctx> {
 			TyErr::BinaryOpInvalidOperandTy(op, operand_ty) => { write!(f, "Binary operator {} has no meaning for operand ty {}", op, self.child(operand_ty)) }
 			TyErr::UnaryOpInvalidOperandTy(op, operand_ty) => { write!(f, "Unary operator {} has no meaning for operand ty {}", op, self.child(operand_ty)) }
 			TyErr::InvalidCast(op, from_ty, to_ty) => { write!(f, "Cannot perform cast {} from {} to {}", op, self.child(from_ty), self.child(to_ty)) }
+			TyErr::InfiniteRecursive(ty_key) => { write!(f, "Type contains infinitely recursive structure with reference to {}", self.child(ty_key)) }
 		}
 	}
 }
