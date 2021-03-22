@@ -1,5 +1,4 @@
 ## Todo
-+ Handle function comparisons in LLVM backend
 + ? Handle i128 properly in LLVM backend
 + ? Add better alignment support
 + Better optimizer conifg

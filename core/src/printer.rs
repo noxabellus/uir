@@ -840,14 +840,14 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 		write!(f, " ")?;
 
 		match &self.0.data {
-			TyData::Void => { writeln!(f, "{}(void)", self.indent()) }
-			TyData::Block => { writeln!(f, "{}(block)", self.indent()) }
-			TyData::Primitive(primitive_ty) => { writeln!(f, "{}({})", self.indent(), primitive_ty) }
-			TyData::Pointer { target_ty } => { writeln!(f, "{}(pointer {})", self.indent(), self.child(target_ty)) }
-			TyData::Array { length, element_ty } => { writeln!(f, "{}(array {} {})", self.indent(), length, self.child(element_ty)) }
+			TyData::Void => { write!(f, "{}(void)", self.indent())?; }
+			TyData::Block => { write!(f, "{}(block)", self.indent())?; }
+			TyData::Primitive(primitive_ty) => { write!(f, "{}({})", self.indent(), primitive_ty)?; }
+			TyData::Pointer { target_ty } => { write!(f, "{}(pointer {})", self.indent(), self.child(target_ty))?; }
+			TyData::Array { length, element_ty } => { write!(f, "{}(array {} {})", self.indent(), length, self.child(element_ty))?; }
 
 			TyData::Structure { field_tys } => {
-				write!(f, "(struct {})", self.list(field_tys.as_slice()))
+				write!(f, "(struct {})", self.list(field_tys.as_slice()))?;
 			}
 
 			TyData::Function { parameter_tys, result_ty } => {
@@ -865,13 +865,15 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 				} else {
 					write!(f, "(")?;
 				}
-
 				write!(f, ")")?;
 
 
-				writeln!(f, "{})", self.indent())
+
+				writeln!(f)?;
+				self.decr_indent();
+				write!(f, "{})", self.indent())?;
 			}
-		}?;
+		}
 
 		write!(f, ")")?;
 
@@ -1324,7 +1326,7 @@ impl<'data, 'ctx> fmt::Display for FunctionPrinter<'data, 'ctx> {
 
 		write!(f, "(function")?;
 
-		write!(f, " :id {}", self.get_function().as_key().as_integer())?;
+		write!(f, " :id {}", self.ctx().functions.get_index(self.0.as_key()).unwrap())?;
 
 		if let Some(name) = self.0.name.as_ref() {
 			write!(f, " :name \"{}\"", name)?;

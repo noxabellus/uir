@@ -799,7 +799,7 @@ impl<'c, T: RichUnwrap<'c>> BuilderResult<T, IrErr> {
 	pub fn unwrap_rich (self, ctx: &'c Context) -> T {
 		if let Some(err) = self.error {
 			let state = PrinterState::new(ctx).with_error(err);
-			panic!("Cannot unwrap BuilderResult:\n{}", self.value.print(state))
+			panic!("{}\n\nCannot unwrap BuilderResult:\n{}", state.print_self(), self.value.print(state))
 		}
 
 		self.value
@@ -1104,10 +1104,8 @@ impl<'c> Builder<'c> {
 
 
 
-	pub fn create_function (&mut self) -> FunctionBuilder<'_> {
-		// SAFETY:
-		// This mutably borrows self, and all the things produced by this borrow it, so theres no harm here
-		FunctionBuilder::new(unsafe { std::mem::transmute::<&'_ mut Builder<'c>, &'_ mut Builder<'_>>(self) })
+	pub fn create_function (&mut self) -> FunctionBuilder<'_, 'c> {
+		FunctionBuilder::new(self)
 	}
 
 
@@ -1195,8 +1193,8 @@ impl<'c> Builder<'c> {
 
 
 #[derive(Debug)]
-pub struct FunctionBuilder<'b> {
-	builder: &'b mut Builder<'b>,
+pub struct FunctionBuilder<'x, 'b> {
+	pub builder: &'x mut Builder<'b>,
 
 	function_key: FunctionKey,
 	function: Function,
@@ -1208,8 +1206,8 @@ pub struct FunctionBuilder<'b> {
 
 
 
-impl<'b> FunctionBuilder<'b> {
-	pub fn new (builder: &'b mut Builder<'b>) -> Self {
+impl<'x, 'b> FunctionBuilder<'x, 'b> {
+	pub fn new (builder: &'x mut Builder<'b>) -> Self {
 		let function_key = builder.ctx.functions.reserve();
 
 		Self {
@@ -1226,7 +1224,7 @@ impl<'b> FunctionBuilder<'b> {
 
 
 
-	pub fn create_child_function (&mut self) -> FunctionBuilder<'_> {
+	pub fn create_child_function (&mut self) -> FunctionBuilder<'_, 'b> {
 		// SAFETY:
 		// This mutably borrows self, and all the things produced by this borrow it, so theres no harm here
 		FunctionBuilder::new(unsafe { std::mem::transmute::<&'_ mut Builder<'b>, &'_ mut Builder<'_>>(self.builder) })
@@ -1241,10 +1239,11 @@ impl<'b> FunctionBuilder<'b> {
 		let function_key = self.function_key;
 
 		if let Err(e) = self.generate_own_ty() {
-			return BuilderResult::new(
+			// TODO: safety justification
+			return unsafe { std::mem::transmute(BuilderResult::new(
 				FunctionManipulator(self.builder.ctx.functions.define(function_key, self.function).unwrap()),
 				Some(e.at(FunctionErrLocation::Root.at(function_key)))
-			)
+			)) }
 		}
 
 		let builder = self.builder;
@@ -1257,7 +1256,8 @@ impl<'b> FunctionBuilder<'b> {
 			)
 			.unwrap();
 
-		match cfg_generator::generate(builder, function_key) {
+		// TODO: safety justification
+		unsafe { std::mem::transmute(match cfg_generator::generate(builder, function_key) {
 			Ok(cfg) => {
 				match ty_checker::check_function(builder, cfg, function_key) {
 					Ok((cfg, ty_map)) => {
@@ -1273,7 +1273,7 @@ impl<'b> FunctionBuilder<'b> {
 				}
 			},
 			Err(e) => BuilderResult::new(builder.get_function_mut(function_key).unwrap(), Some(e))
-		}
+		}) }
 	}
 
 

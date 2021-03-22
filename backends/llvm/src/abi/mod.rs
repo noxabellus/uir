@@ -1,6 +1,6 @@
 use crate::wrapper::*;
 
-use std::any::{ TypeId };
+use std::{any::{ TypeId }};
 use uir_core::{
 	support::utils::clamp,
 	target::{self, Target},
@@ -43,10 +43,13 @@ impl ArgAttr {
 		}) as *const _ as *const _
 	}
 
-	pub fn to_llvm (self, ctx: LLVMContextRef) -> LLVMAttributeRef {
+	pub fn to_llvm (self, ctx: LLVMContextRef) -> Option<LLVMAttributeRef> {
 		let name = self.as_cstr();
 
-		unsafe { LLVMCreateEnumAttribute(ctx, LLVMGetEnumAttributeKindForName(name, strlen(name)), 1) }
+		// BUG/HACK/TODO: LLVM messes up the other attributes producing "" in the output ir
+		if !matches!(self, ArgAttr::ByVal) { return None }
+
+		Some(unsafe { LLVMCreateEnumAttribute(ctx, LLVMGetEnumAttributeKindForName(name, strlen(name)), 1) })
 	}
 }
 
@@ -118,6 +121,50 @@ pub struct Function {
 }
 
 impl Function {
+	// fn hide_unrepresentable_abi_types (&mut self, ctx: LLVMContextRef, lltype: LLVMType) -> LLVMType {
+	// 	fn hide_impl (ctx: LLVMContextRef, func: &mut Function, map: &mut HashMap<LLVMType, LLVMType>, in_ty: LLVMType) -> LLVMType {
+	// 		if let Some(&existing) = map.get(&in_ty) {
+	// 			return existing
+	// 		}
+
+	// 		let out_ty = match in_ty.kind() {
+	// 			| LLVMVoidTypeKind
+	// 			| LLVMHalfTypeKind
+	// 			| LLVMFloatTypeKind
+	// 			| LLVMDoubleTypeKind
+	// 			| LLVMX86_FP80TypeKind
+	// 			| LLVMFP128TypeKind
+	// 			| LLVMPPC_FP128TypeKind
+	// 			| LLVMLabelTypeKind
+	// 			| LLVMIntegerTypeKind
+	// 			| LLVMVectorTypeKind
+	// 			| LLVMMetadataTypeKind
+	// 			| LLVMX86_MMXTypeKind
+	// 			| LLVMTokenTypeKind
+	// 			=> in_ty,
+
+	// 			LLVMFunctionTypeKind
+	// 			=> LLVMType::void(ctx),
+
+	// 			| LLVMStructTypeKind
+	// 			=> {
+	// 				for field_ty in
+	// 			}
+
+	// 			| LLVMArrayTypeKind
+	// 			| LLVMPointerTypeKind
+	// 			=> todo!()
+	// 		};
+
+	// 		map.insert(in_ty, out_ty);
+
+	// 		out_ty
+	// 	}
+
+	// 	hide_impl(ctx, self, &mut HashMap::default(), lltype)
+	// }
+
+
 	pub fn from_data (ctx: LLVMContextRef, args: Vec<Arg>, result: Arg) -> Self {
 		// if is_var_args { todo!() }
 
@@ -126,7 +173,12 @@ impl Function {
 		let ret = match result.kind {
 			ArgKind::Direct => {
 				if result.cast_types.is_empty() {
-					result.base_type
+					if result.attribute == Some(ArgAttr::ZExt) {
+						// TODO: currently this is only handling i8->u8
+						LLVMType::int8(ctx)
+					} else {
+						result.base_type
+					}
 				} else if result.cast_types.len() == 1 {
 					result.cast_types[0]
 				} else {
@@ -178,7 +230,9 @@ impl Function {
 	pub fn apply_attributes (&self, ctx: LLVMContextRef, func: LLVMValue, /* ProcCallingConvention calling_convention */) {
 		let mut j = if self.result.kind == ArgKind::Indirect {
 			if let Some(attr) = self.result.attribute {
-				unsafe { LLVMAddAttributeAtIndex(func.into(), 1, attr.to_llvm(ctx)) }
+				if let Some(attr) = attr.to_llvm(ctx) {
+					unsafe { LLVMAddAttributeAtIndex(func.into(), 1, attr) }
+				}
 			}
 
 			2
@@ -186,7 +240,9 @@ impl Function {
 			if LLVMType::of(func).get_return_type() != LLVMType::void(ctx) {
 				if let Some(attr) = self.result.attribute {
 					assert!(attr.applies_to_ret());
-					unsafe { LLVMAddAttributeAtIndex(func.into(), 0, attr.to_llvm(ctx)) }
+					if let Some(attr) = attr.to_llvm(ctx) {
+						unsafe { LLVMAddAttributeAtIndex(func.into(), 0, attr) }
+					}
 				}
 			}
 
@@ -195,7 +251,9 @@ impl Function {
 
 		for arg in self.args.iter() {
 			if let Some(attr) = arg.attribute {
-				unsafe { LLVMAddAttributeAtIndex(func.into(), j, attr.to_llvm(ctx)) }
+				if let Some(attr) = attr.to_llvm(ctx) {
+					unsafe { LLVMAddAttributeAtIndex(func.into(), j, attr) }
+				}
 			}
 
 			j += arg.cast_types.len().min(1) as u32;
@@ -271,10 +329,15 @@ pub trait Abi: Target {
 				16 => PrimitiveTy::UInt128,
 				x => unreachable!("Cannot create prim ty from unsupported integer size {:?}", x)
 			},
+
 			LLVMFloatTypeKind => PrimitiveTy::Real32,
-			LLVMDoubleTypeKind => PrimitiveTy::Real64,
+
+			| LLVMDoubleTypeKind
+			| LLVMX86_MMXTypeKind
+			=> PrimitiveTy::Real64,
+
 			LLVMPointerTypeKind => self.pointer_int(),
-			LLVMX86_MMXTypeKind => PrimitiveTy::Real64,
+
 			x => unreachable!("Cannot create prim ty from unsupported type {:?}", x)
 		}
 	}
@@ -309,6 +372,7 @@ pub trait Abi: Target {
 				}
 				offset
 			}
+
 			LLVMArrayTypeKind => {
 				let elem = ty.get_element_type();
 				let elem_size = self.size_of(elem);
@@ -349,6 +413,7 @@ pub trait Abi: Target {
 					max_align
 				}
 			}
+
 			LLVMArrayTypeKind => self.align_of(ty.get_element_type()),
 			LLVMVectorTypeKind =>	clamp((ty.get_array_length() * self.size_of(ty.get_element_type())).next_power_of_two(), 1, 16),
 

@@ -1,7 +1,7 @@
 
 use crate::abi::{self, Abi, ArgAttr, ArgKind};
 
-use uir_core::{ir::*, support::{slotmap::{self, Key}, stack::Stack}, ty::*};
+use uir_core::{ir::*, support::stack::Stack, ty::*};
 
 use std::{collections::HashMap, ops};
 
@@ -15,7 +15,9 @@ pub struct Emitter<'a> {
 	pub types: HashMap<TyKey, LLVMType>,
 	pub globals: HashMap<GlobalKey, LLVMValue>,
 	pub functions: HashMap<FunctionKey, LLVMValue>,
-	pub target_signature_types: HashMap<LLVMType, abi::Function>,
+	pub target_to_local: HashMap<LLVMType, LLVMType>,
+	pub local_to_target: HashMap<LLVMType, LLVMType>,
+	pub target_abi_info: HashMap<LLVMType, abi::Function>,
 }
 
 pub struct EmitterFunctionState<'c> {
@@ -93,7 +95,9 @@ impl<'a> Emitter<'a> {
 			types: HashMap::default(),
 			globals: HashMap::default(),
 			functions: HashMap::default(),
-			target_signature_types: HashMap::default(),
+			target_to_local: HashMap::default(),
+			local_to_target: HashMap::default(),
+			target_abi_info: HashMap::default(),
 		})
 	}
 
@@ -154,7 +158,7 @@ impl<'a> Emitter<'a> {
 					let llname = if let Some(name) = ty.name.as_ref() {
 						LLVMString::from(name)
 					} else {
-						LLVMString::from(format!("$s({})", ty_key.as_integer()))
+						LLVMString::from(format!("$s({})", self.ctx.tys.get_index(ty_key).unwrap()))
 					};
 
 					let llty = LLVMType::named_empty_structure(self.ll.ctx, llname);
@@ -170,7 +174,9 @@ impl<'a> Emitter<'a> {
 				Function { parameter_tys, result_ty } => {
 					let param_types = parameter_tys.iter().map(|&ty_key| self.emit_ty(ty_key)).collect::<Vec<_>>();
 					let result_type = result_ty.map(|ty_key| self.emit_ty(ty_key));
-					LLVMType::function(&param_types, result_type.unwrap_or_else(|| LLVMType::void(self.ll.ctx)), false)
+					let base_ty = LLVMType::function(&param_types, result_type.unwrap_or_else(|| LLVMType::void(self.ll.ctx)), false);
+
+					self.get_target_ty_from_base_ty(base_ty)
 				}
 			}
 		};
@@ -180,21 +186,34 @@ impl<'a> Emitter<'a> {
 		llty
 	}
 
-	pub fn abi_info(&mut self, lltype: LLVMType) -> abi::Function {
-		assert!(lltype.kind() == LLVMFunctionTypeKind);
+	#[cfg_attr(debug_assertions, track_caller)]
+	pub fn get_base_ty_from_target_ty (&self, target_llty: LLVMType) -> LLVMType {
+		*dbg!(&self.target_to_local).get(&target_llty).unwrap()
+	}
 
-		match self.target_signature_types.get(&lltype).cloned() {
-			Some(existing) => existing,
-			None => {
-				let parameter_tys = lltype.get_param_types();
-				let return_ty = lltype.get_return_type();
+	#[cfg_attr(debug_assertions, track_caller)]
+	pub fn get_abi_from_target_ty (&self, target_llty: LLVMType) -> abi::Function {
+		dbg!(&self.target_abi_info).get(&target_llty).unwrap().clone()
+	}
 
-				let abi = self.abi.get_info(self.ll.ctx, &parameter_tys, return_ty);
-				self.target_signature_types.insert(lltype, abi.clone());
+	pub fn get_target_ty_from_base_ty (&mut self, local_llty: LLVMType) -> LLVMType {
+		assert!(local_llty.kind() == LLVMFunctionTypeKind);
 
-				abi
-			}
+		if let Some(&existing) = self.local_to_target.get(&local_llty) {
+			return existing
 		}
+
+		let parameter_tys = local_llty.get_param_types();
+		let return_ty = local_llty.get_return_type();
+
+		let abi = self.abi.get_info(self.ll.ctx, &parameter_tys, return_ty);
+		let target_llty = abi.lltype.as_pointer(0);
+
+		self.local_to_target.insert(local_llty, target_llty);
+		self.target_to_local.insert(target_llty, local_llty);
+		self.target_abi_info.insert(target_llty, abi);
+
+		target_llty
 	}
 
 
@@ -337,10 +356,6 @@ impl<'a> Emitter<'a> {
 		}
 	}
 
-	pub fn generate_id<K: slotmap::Key> (prefix: &str, k: K) -> LLVMString {
-		LLVMString::from(format!("${}({})", prefix, k.as_integer()))
-	}
-
 	pub fn emit_global (&mut self, global_key: GlobalKey) -> LLVMValue {
 		if let Some(llglobal) = self.globals.get(&global_key) {
 			return *llglobal
@@ -353,7 +368,7 @@ impl<'a> Emitter<'a> {
 		let llname = if let Some(name) = global.name.as_ref() {
 			LLVMString::from(name)
 		} else {
-			Self::generate_id("g", global_key)
+			LLVMString::from(format!("$g({})", self.ctx.globals.get_index(global_key).unwrap()))
 		};
 
 		let llglobal = LLVMValue::create_global(self.module.inner(), llty, llname);
@@ -378,17 +393,18 @@ impl<'a> Emitter<'a> {
 
 		let function = self.ctx.functions.get(function_key).unwrap();
 
-		let llty = self.emit_ty(function.ty);
-		let abi = self.abi_info(llty);
-		let abi_llty = abi.lltype;
+		let target_llty_ptr = self.emit_ty(function.ty);
+		let abi = self.get_abi_from_target_ty(target_llty_ptr);
+		let target_llty = target_llty_ptr.get_element_type();
+		// let llty = self.get_base_ty_from_target_ty(target_llty);
 
 		let llname = if let Some(name) = function.name.as_ref() {
 			LLVMString::from(name)
 		} else {
-			Self::generate_id("f", function_key)
+			LLVMString::from(format!("$f({})", self.ctx.functions.get_index(function_key).unwrap()))
 		};
 
-		let func = LLVMValue::create_function(self.module.inner(), abi_llty, llname);
+		let func = LLVMValue::create_function(self.module.inner(), target_llty, llname);
 
 		abi.apply_attributes(self.ll.ctx, func);
 		abi.apply_alignment(func);
@@ -724,7 +740,7 @@ impl<'a> Emitter<'a> {
 
 				let function = self.ctx.functions.get(*fkey).unwrap();
 				let llf = self.emit_function_decl(*fkey);
-				let llty = self.emit_ty(function.ty).as_pointer(0);
+				let llty = self.emit_ty(function.ty); // .as_pointer(0); theyre already pointers
 				let ty_key = self.ir_ty(fstate, ir_idx);
 				fstate.stack.push(Value::source(llf, llty, ir_idx, ty_key))
 			}
@@ -1028,8 +1044,9 @@ impl<'a> Emitter<'a> {
 
 
 	pub fn emit_entry (&mut self, fstate: &mut EmitterFunctionState) -> LLVMBlock {
-		let lltype = self.emit_ty(fstate.func.ty);
-		let abi = self.abi_info(lltype);
+		let target_lltype = self.emit_ty(fstate.func.ty);
+		let abi = self.get_abi_from_target_ty(target_lltype);
+		// let lltype = self.get_base_ty_from_target_ty(target_lltype);
 
 		let entry = self.ll.append_basic_block(fstate.llfunc, llvm_str!("abi"));
 		self.ll.position_at_end(entry);
@@ -1104,8 +1121,9 @@ impl<'a> Emitter<'a> {
 
 
 	pub fn emit_return (&mut self, fstate: &mut EmitterFunctionState, mut stack: Stack<Value>) -> LLVMValue {
-		let lltype = self.emit_ty(fstate.func.ty);
-		let abi = self.abi_info(lltype);
+		let target_lltype = self.emit_ty(fstate.func.ty);
+		let abi = self.get_abi_from_target_ty(target_lltype);
+		// let lltype = self.get_base_ty_from_target_ty(target_lltype);
 
 		let val = match abi.result.kind {
 			ArgKind::Direct => {
@@ -1155,15 +1173,17 @@ impl<'a> Emitter<'a> {
 
 
 	pub fn emit_call (&mut self, fstate: &mut EmitterFunctionState<'a>) -> Option<(LLVMValue, LLVMType)> {
-		let Value { llvalue, mut lltype, .. } = fstate.stack.pop().unwrap();
+		let Value { llvalue, lltype: target_llty_ptr, .. } = fstate.stack.pop().unwrap();
 
-		if lltype.is_pointer_kind() { lltype = lltype.get_element_type() }
+		assert!(target_llty_ptr.is_pointer_kind());
+		let target_llty = target_llty_ptr.get_element_type();
 
-		assert!(lltype.is_function_kind());
+		assert!(dbg!(target_llty).is_function_kind(), "expected function type not {:#?}", target_llty);
 
-		let abi = self.abi_info(lltype);
-		debug_assert_eq!(lltype, abi.lltype);
+		let abi = self.get_abi_from_target_ty(target_llty_ptr);
+		let lltype = self.get_base_ty_from_target_ty(target_llty_ptr);
 		debug_assert_eq!(lltype.count_param_types() as usize, abi.args.len());
+
 
 
 
@@ -1181,7 +1201,12 @@ impl<'a> Emitter<'a> {
 						debug_assert!(abi_arg.base_type == LLVMType::int1(self.ll.ctx));
 						self.ll.zext(base_llvalue, LLVMType::int8(self.ll.ctx))
 					} else if abi_arg.cast_types.is_empty() {
-						base_llvalue
+						// Need to cast function pointers to their abi equivalents
+						if lltype.is_pointer_kind() && lltype.get_element_type().is_function_kind() {
+							self.ll.bitcast(base_llvalue, lltype)
+						} else {
+							base_llvalue
+						}
 					} else {
 						let arg_struct = LLVMType::anonymous_structure(self.ll.ctx, &abi_arg.cast_types, false);
 
@@ -1283,21 +1308,18 @@ impl<'a> Emitter<'a> {
 			Ne if ty.is_real()
 			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue), int1),
 
-			Eq if ty.is_pointer() => {
+			Eq if ty.is_pointer() || ty.is_function() => {
 				let intptr = self.abi.llvm_pointer_int(self.ll.ctx);
-				let lla = self.ll.i2p(a.llvalue, intptr);
-				let llb = self.ll.i2p(b.llvalue, intptr);
+				let lla = self.ll.p2i(a.llvalue, intptr);
+				let llb = self.ll.p2i(b.llvalue, intptr);
 				(self.ll.icmp(LLVMIntEQ, lla, llb), int1)
 			}
-			Ne if ty.is_pointer() => {
+			Ne if ty.is_pointer() || ty.is_function() => {
 				let intptr = self.abi.llvm_pointer_int(self.ll.ctx);
-				let lla = self.ll.i2p(a.llvalue, intptr);
-				let llb = self.ll.i2p(b.llvalue, intptr);
+				let lla = self.ll.p2i(a.llvalue, intptr);
+				let llb = self.ll.p2i(b.llvalue, intptr);
 				(self.ll.icmp(LLVMIntNE, lla, llb), int1)
 			}
-
-			Eq if ty.is_function() => { todo!() } // TODO: function comparison
-			Ne if ty.is_function() => { todo!() }
 
 
 
