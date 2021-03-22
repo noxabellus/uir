@@ -9,7 +9,7 @@
 
 ## Random ideas
 + Add union types
-+ Add vector types
++ Add pointer arithmetic
 + Create a wasm backend
 + Create an interpreter
 + Generate RTTI tables such as type names and layouts
