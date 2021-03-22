@@ -1220,7 +1220,7 @@ fn structures_jit () {
 		let mut optimizer = Optimizer::with_level(&emitter, 3);
 		optimizer.optimize(llfunction);
 		println!("optimized ir:");
-		unsafe { LLVMDumpModule(optimizer.module().inner()) }
+		// unsafe { LLVMDumpModule(optimizer.module().inner()) }
 
 		if let Some(ret_test) = ret_tests.get(&ty) {
 			let mut jit = Jit::new(&mut emitter);
