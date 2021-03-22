@@ -840,11 +840,12 @@ impl<'data, 'ctx> fmt::Display for TyPrinter<'data, 'ctx> {
 		write!(f, " ")?;
 
 		match &self.0.data {
-			TyData::Void => { write!(f, "{}(void)", self.indent())?; }
-			TyData::Block => { write!(f, "{}(block)", self.indent())?; }
-			TyData::Primitive(primitive_ty) => { write!(f, "{}({})", self.indent(), primitive_ty)?; }
-			TyData::Pointer { target_ty } => { write!(f, "{}(pointer {})", self.indent(), self.child(target_ty))?; }
-			TyData::Array { length, element_ty } => { write!(f, "{}(array {} {})", self.indent(), length, self.child(element_ty))?; }
+			TyData::Void => { write!(f, "(void)")?; }
+			TyData::Block => { write!(f, "(block)")?; }
+			TyData::Primitive(primitive_ty) => { write!(f, "({})", primitive_ty)?; }
+			TyData::Pointer { target_ty } => { write!(f, "(pointer {})", self.child(target_ty))?; }
+			TyData::Array { length, element_ty } => { write!(f, "(array {} {})", length, self.child(element_ty))?; }
+			TyData::Vector { length, element_ty, .. } => { write!(f, "(vector {} {})", length, self.child(element_ty))?; }
 
 			TyData::Structure { field_tys } => {
 				write!(f, "(struct {})", self.list(field_tys.as_slice()))?;
@@ -1220,6 +1221,7 @@ impl<'data, 'ctx> fmt::Display for TyErrPrinter<'data, 'ctx> {
 			TyErr::GepOutOfBounds(elem_idx, ty_key, len, idx) => { write!(f, "Gep instruction element {} constant index {} is out of bounds 0 <-> {} for subtarget type {}", elem_idx, idx, len, self.child(ty_key)) }
 			TyErr::ExpectedTy(expected_ty, found_ty) => { write!(f, "Expected type {}, but found {}", self.child(expected_ty), self.child(found_ty)) }
 			TyErr::ExpectedArray(ty_key) => { write!(f, "Value is not an array but {}", self.child(ty_key)) }
+			TyErr::ExpectedVector(ty_key) => { write!(f, "Value is not an vector but {}", self.child(ty_key)) }
 			TyErr::ExpectedStructure(ty_key) => { write!(f, "Value is not a struct but {}", self.child(ty_key)) }
 			TyErr::ExpectedEmptyStructure(ty_key) => { write!(f, "Expected structure type {} to have no fields", self.child(ty_key)) }
 			TyErr::ExpectedFunction(ty_key) => { write!(f, "Value is not a function but {}", self.child(ty_key)) }
@@ -1556,7 +1558,7 @@ macro_rules! meta_printers {
 
 			impl<'data, 'ctx> Printable<'data, 'ctx> for Keyed<'data, $tyname> {
 				type Printer = [<$tyname Printer>]<'data, 'ctx>;
-	fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { [< $tyname Printer >]::<'data, 'ctx>(data, RefCell::new(state)) }
+				fn create_printer (data: Self, state: PrinterState<'ctx>) -> Self::Printer { [< $tyname Printer >]::<'data, 'ctx>(data, RefCell::new(state)) }
 			}
 		}
 	)+ };

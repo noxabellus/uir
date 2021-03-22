@@ -303,38 +303,37 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 		let invalid_operand_err = TyErr::BinaryOpInvalidOperandTy(op, ty_key);
 
-		assert(ty.is_scalar(), invalid_operand_err)?;
-
 		use BinaryOp::*;
 
 		Ok(match op {
 			Add | Sub | Mul | Div | Rem
 			=> {
-				assert(ty.is_arithmetic(), invalid_operand_err)?;
+				assert(ty.supports_arithmetic_ops(), invalid_operand_err)?;
 				ty
 			}
 
 			Lt | Gt | Le | Ge
 			=> {
-				assert(ty.is_arithmetic(), invalid_operand_err)?;
+				assert(ty.supports_order_ops(), invalid_operand_err)?;
 				self.builder.bool_ty()
 			}
 
 			Eq | Ne
 			=> {
-				assert(ty.has_equality(), invalid_operand_err)?;
+				assert(ty.supports_equality_ops(), invalid_operand_err)?;
 				self.builder.bool_ty()
 			}
 
 			LAnd | LOr
 			=> {
-				assert(ty.is_bool(), invalid_operand_err)?;
+				assert(ty.supports_logical_ops(), invalid_operand_err)?;
 				ty
 			}
 
-			BAnd | BOr | BXor | LSh | RShA | RShL
+			| BAnd | BOr |  BXor
+			| LSh  | RShA | RShL
 			=> {
-				assert(ty.is_int(), invalid_operand_err)?;
+				assert(ty.supports_bitwise_ops(self.builder.ctx)?, invalid_operand_err)?;
 				ty
 			}
 		})
@@ -345,26 +344,24 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 
 		let invalid_operand_err = TyErr::UnaryOpInvalidOperandTy(op, ty_key);
 
-		assert(ty.is_scalar(), invalid_operand_err)?;
-
 		use UnaryOp::*;
 
 		Ok(match op {
 			Neg
 			=> {
-				assert(ty.is_signed(), invalid_operand_err)?;
+				assert(ty.supports_sign_ops(self.builder.ctx)?, invalid_operand_err)?;
 				ty
 			}
 
 			LNot
 			=> {
-				assert(ty.is_bool(), invalid_operand_err)?;
+				assert(ty.supports_logical_ops(), invalid_operand_err)?;
 				ty
 			}
 
 			BNot
 			=> {
-				assert(ty.is_int(), invalid_operand_err)?;
+				assert(ty.supports_bitwise_ops(self.builder.ctx)?, invalid_operand_err)?;
 				ty
 			}
 		})
@@ -880,7 +877,7 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 			=> {
 				let pred = self.builder.get_ty(self.stack.pop()?)?;
 
-				assert(pred.has_equality(), TyErr::InvalidSwitchTy(pred.as_key()))?;
+				assert(pred.supports_equality_ops(), TyErr::InvalidSwitchTy(pred.as_key()))?;
 
 				for (constant, _) in edges.iter() {
 					let const_ty = self.get_constant_ty(constant)?;

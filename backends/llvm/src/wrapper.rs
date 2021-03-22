@@ -653,6 +653,7 @@ impl LLVMType {
 	pub fn is_token_kind (self) -> bool { self.is_kind(LLVMTokenTypeKind) }
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get_address_space (self) -> u32 {
 		assert_eq!(self.kind(), LLVMPointerTypeKind);
 
@@ -660,6 +661,7 @@ impl LLVMType {
 	}
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn count_param_types (self) -> u32 {
 		assert_eq!(self.kind(), LLVMFunctionTypeKind);
 
@@ -683,6 +685,7 @@ impl LLVMType {
 	}
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get_int_type_width (self) -> u32 {
 		assert_eq!(self.kind(), LLVMIntegerTypeKind);
 
@@ -695,6 +698,7 @@ impl LLVMType {
 	}
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn count_element_types (self) -> u32 {
 		assert_eq!(self.kind(), LLVMStructTypeKind);
 
@@ -702,6 +706,7 @@ impl LLVMType {
 	}
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get_array_length (self) -> u32 {
 		assert_eq!(self.kind(), LLVMArrayTypeKind);
 
@@ -709,6 +714,7 @@ impl LLVMType {
 	}
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get_vector_size (self) -> u32 {
 		assert_eq!(self.kind(), LLVMVectorTypeKind);
 
@@ -728,6 +734,7 @@ impl LLVMType {
 	}
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get_element_type (self) -> LLVMType {
 		assert!(matches!(self.kind(), LLVMArrayTypeKind | LLVMVectorTypeKind | LLVMPointerTypeKind));
 
@@ -740,6 +747,10 @@ impl LLVMType {
 
 	pub fn as_array (self, length: u32) -> LLVMType {
 		Self::array(self, length)
+	}
+
+	pub fn as_vector (self, length: u32) -> LLVMType {
+		Self::vector(self, length)
 	}
 
 	pub fn primitive(ctx: LLVMContextRef, prim: PrimitiveTy) -> LLVMType {
@@ -1072,6 +1083,7 @@ impl LLVMValue {
 		self
 	}
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get_global_parent (self) -> LLVMModuleRef {
 		assert!(self.is_global_variable_node() || self.is_function_node());
 		unsafe { LLVMGetGlobalParent(self.into()) }
@@ -1323,12 +1335,14 @@ impl LLVMValue {
 	//
 	//
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn count_params (self) -> u32 {
 		assert!(self.is_function_kind());
 
 		unsafe { LLVMCountParams(self.into()) }
 	}
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn get_param (self, index: u32) -> LLVMValue {
 		assert!(index < self.count_params());
 		unsafe { LLVMGetParam(self.into(), index).into() }
@@ -1347,6 +1361,7 @@ impl LLVMValue {
 	}
 
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn add_incoming (self, incoming_values: &[LLVMValue], incoming_blocks: &[LLVMBlock]) {
 		assert!(self.is_phi_node());
 		assert_eq!(incoming_values.len(), incoming_blocks.len());
@@ -1354,6 +1369,7 @@ impl LLVMValue {
 		unsafe { LLVMAddIncoming(self.into(), incoming_values.as_ptr() as _, incoming_blocks.as_ptr() as _, incoming_values.len() as _) }
 	}
 
+	#[cfg_attr(debug_assertions, track_caller)]
 	pub fn add_case (self, predicate: LLVMValue, body: LLVMBlock) {
 		assert!(self.is_switch_inst_node());
 		unsafe { LLVMAddCase(self.into(), predicate.into(), body.into()) }
@@ -1619,6 +1635,15 @@ impl LLVM {
 	pub fn extract_value (&self, llval: LLVMValue, idx: u32) -> LLVMValue {
 		unsafe { LLVMBuildExtractValue(self.builder, llval.into(), idx, Unnamed.to_lltext()).into() }
 	}
+
+	pub fn insert_element (&self, vec: LLVMValue, new_field: LLVMValue, idx: u32) -> LLVMValue {
+		unsafe { LLVMBuildInsertElement(self.builder, vec.into(), new_field.into(), LLVMValue::int(LLVMType::int32(self.ctx), idx as _).into(), Unnamed.to_lltext()).into() }
+	}
+
+	pub fn extract_element (&self, llval: LLVMValue, idx: u32) -> LLVMValue {
+		unsafe { LLVMBuildExtractElement(self.builder, llval.into(), LLVMValue::int(LLVMType::int32(self.ctx), idx as _).into(), Unnamed.to_lltext()).into() }
+	}
+
 
 	pub fn load (&self, llptr: LLVMValue) -> LLVMValue {
 		unsafe { LLVMBuildLoad(self.builder, llptr.into(), Unnamed.to_lltext()).into() }

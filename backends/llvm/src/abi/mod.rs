@@ -381,7 +381,7 @@ pub trait Abi: Target {
 			}
 
 			LLVMVectorTypeKind => {
-				clamp((ty.get_array_length() * self.size_of(ty.get_element_type())).next_power_of_two(), 1, 16)
+				clamp((ty.get_vector_size() * self.size_of(ty.get_element_type())).next_power_of_two(), 1, 16)
 			},
 
 			_ => unreachable!("Unhandled type for size_of: {:?}", ty)
@@ -415,7 +415,7 @@ pub trait Abi: Target {
 			}
 
 			LLVMArrayTypeKind => self.align_of(ty.get_element_type()),
-			LLVMVectorTypeKind =>	clamp((ty.get_array_length() * self.size_of(ty.get_element_type())).next_power_of_two(), 1, 16),
+			LLVMVectorTypeKind =>	clamp((ty.get_vector_size() * self.size_of(ty.get_element_type())).next_power_of_two(), 1, 16),
 
 			_ => unreachable!("Unhandled type for align_of: {:?}", ty)
 		}

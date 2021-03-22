@@ -114,6 +114,66 @@ use {
 
 
 
+
+#[test]
+fn vector_types () {
+	let mut context = Context::with_target(target::AMD64);
+	let mut builder = Builder::new(&mut context);
+
+	let bool = builder.bool_ty().as_key();
+	let r32 = builder.real32_ty().as_key();
+	let r32x2 = builder.vector_ty(2, r32).unwrap().as_key();
+
+
+	let mut f = builder.create_function();
+
+	f.set_name("compare_vector");
+	let a = f.append_param(r32x2).set_name("a").as_key();
+	let b = f.append_param(r32x2).set_name("b").as_key();
+	f.set_return_ty(bool);
+
+	block!(f, entry {
+		f.param_ref(a);
+		f.load();
+		f.param_ref(b);
+		f.load();
+		f.binary_op(Eq);
+		f.ret();
+	});
+
+	let ucompare_vector = f.finalize().map(FunctionManipulator::into_key).unwrap_rich(&builder.ctx);
+
+	let pstate = PrinterState::new(&context);
+	let mut emitter = Emitter::new(&context).unwrap();
+
+	let llfunction = emitter.emit_function(ucompare_vector);
+
+	println!("{}", pstate.print_function(ucompare_vector));
+	println!("{:#?}", llfunction);
+
+	llfunction.verify_function(LLVMAbortProcessAction);
+
+
+	let mut optimizer = Optimizer::with_level(&emitter, 3);
+	assert!(optimizer.optimize(llfunction), "failed to optimize");
+	println!("optimized ir:\n{:#?}", llfunction);
+
+
+	let mut jit = Jit::new(&mut emitter);
+	let compare_vector = jit.get_function(llvm_str!("compare_vector"));
+	assert!(!compare_vector.is_null());
+	let compare_vector: extern "C" fn ((f32, f32), (f32, f32)) -> bool = unsafe { std::mem::transmute(compare_vector) };
+
+	assert_eq!(dbg!(compare_vector((1., 2.), (1., 2.))), true);
+	assert_eq!(dbg!(compare_vector((256., 10245122.), (256., 10245122.))), true);
+	assert_eq!(dbg!(compare_vector((2., 1.), (1., 2.))), false);
+	assert_eq!(dbg!(compare_vector((10245122., 256.), (256., 10245122.))), false);
+}
+
+
+
+
+
 #[test]
 fn compare_fn_ptr () {
 	let mut context = Context::with_target(target::AMD64);

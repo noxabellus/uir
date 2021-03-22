@@ -154,6 +154,8 @@ impl<'a> Emitter<'a> {
 
 				Array { length, element_ty } => self.emit_ty(*element_ty).as_array(*length as _),
 
+				Vector { length, element_ty } => self.emit_ty(*element_ty).as_vector(*length as _),
+
 				Structure { field_tys } => {
 					let llname = if let Some(name) = ty.name.as_ref() {
 						LLVMString::from(name)
@@ -1072,6 +1074,10 @@ impl<'a> Emitter<'a> {
 						self.ll.itrunc(llparams.next().unwrap(), LLVMType::int1(self.ll.ctx))
 					} else if abi_arg.cast_types.is_empty() {
 						llparams.next().unwrap()
+					} else if abi_arg.cast_types.len() == 1 {
+						let cast_ty = abi_arg.cast_types[0];
+						abi_ptr = self.ll.bitcast(abi_ptr, cast_ty.as_pointer(0));
+						llparams.next().unwrap()
 					} else {
 						let cast_ty = LLVMType::anonymous_structure(self.ll.ctx, &abi_arg.cast_types, false);
 						let mut agg = LLVMValue::zero(cast_ty);
@@ -1264,6 +1270,23 @@ impl<'a> Emitter<'a> {
 	}
 
 
+	pub fn collapse_bit_vec (&mut self, llres: LLVMValue, ty: &Ty) -> Option<(LLVMValue, LLVMType)> {
+		if let TyData::Vector { length, .. } = &ty.data {
+			let llout_ty = LLVMType::int1(self.ll.ctx);
+			let mut llout = self.ll.extract_element(llres, 0);
+
+			for i in 1..*length {
+				let llelem = self.ll.extract_element(llres, i);
+
+				llout = self.ll.and(llout, llelem);
+			}
+
+			Some((llout, llout_ty))
+		} else {
+			None
+		}
+	}
+
 
 	pub fn emit_bin_op (&mut self, bin_op: BinaryOp, a: Value, b: Value, ty: &'a Ty) -> (LLVMValue, LLVMType) {
 		use BinaryOp::*;
@@ -1271,42 +1294,54 @@ impl<'a> Emitter<'a> {
 		let int1 = LLVMType::int1(self.ll.ctx);
 
 		match bin_op {
-			Add if ty.is_int()
+			Add if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.iadd(a.llvalue, b.llvalue), a.lltype),
-			Sub if ty.is_int()
+			Sub if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.isub(a.llvalue, b.llvalue), a.lltype),
-			Mul if ty.is_int()
+			Mul if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.imul(a.llvalue, b.llvalue), a.lltype),
-			Div if ty.is_int()
-			=> (self.ll.idiv(ty.is_signed(), a.llvalue, b.llvalue), a.lltype),
-			Rem if ty.is_int()
-			=> (self.ll.irem(ty.is_signed(), a.llvalue, b.llvalue), a.lltype),
+			Div if ty.requires_integer_ops(self.ctx).unwrap()
+			=> (self.ll.idiv(ty.supports_sign_ops(self.ctx).unwrap(), a.llvalue, b.llvalue), a.lltype),
+			Rem if ty.requires_integer_ops(self.ctx).unwrap()
+			=> (self.ll.irem(ty.supports_sign_ops(self.ctx).unwrap(), a.llvalue, b.llvalue), a.lltype),
 
 
 
-			Add if ty.is_real()
+			Add if ty.requires_real_ops(self.ctx).unwrap()
 			=> (self.ll.fadd(a.llvalue, b.llvalue), a.lltype),
-			Sub if ty.is_real()
+			Sub if ty.requires_real_ops(self.ctx).unwrap()
 			=> (self.ll.fsub(a.llvalue, b.llvalue), a.lltype),
-			Mul if ty.is_real()
+			Mul if ty.requires_real_ops(self.ctx).unwrap()
 			=> (self.ll.fmul(a.llvalue, b.llvalue), a.lltype),
-			Div if ty.is_real()
+			Div if ty.requires_real_ops(self.ctx).unwrap()
 			=> (self.ll.fdiv(a.llvalue, b.llvalue), a.lltype),
-			Rem if ty.is_real()
+			Rem if ty.requires_real_ops(self.ctx).unwrap()
 			=> (self.ll.frem(a.llvalue, b.llvalue), a.lltype),
 
 
 
 
-			Eq if ty.is_bool() || ty.is_int()
-			=> (self.ll.icmp(LLVMIntEQ, a.llvalue, b.llvalue), int1),
-			Ne if ty.is_bool() || ty.is_int()
-			=> (self.ll.icmp(LLVMIntNE, a.llvalue, b.llvalue), int1),
+			Eq if ty.is_bool() || ty.requires_integer_ops(self.ctx).unwrap()
+			=> {
+				let llres = self.ll.icmp(LLVMIntEQ, a.llvalue, b.llvalue);
+				self.collapse_bit_vec(llres, ty).unwrap_or((llres, int1))
+			}
+			Ne if ty.is_bool() || ty.requires_integer_ops(self.ctx).unwrap()
+			=> {
+				let llres = self.ll.icmp(LLVMIntNE, a.llvalue, b.llvalue);
+				self.collapse_bit_vec(llres, ty).unwrap_or((llres, int1))
+			}
 
-			Eq if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealUEQ, a.llvalue, b.llvalue), int1),
-			Ne if ty.is_real()
-			=> (self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue), int1),
+			Eq if ty.requires_real_ops(self.ctx).unwrap()
+			=> {
+				let llres = self.ll.fcmp(LLVMRealUEQ, a.llvalue, b.llvalue);
+				self.collapse_bit_vec(llres, ty).unwrap_or((llres, int1))
+			}
+			Ne if ty.requires_real_ops(self.ctx).unwrap()
+			=> {
+				let llres = self.ll.fcmp(LLVMRealUNE, a.llvalue, b.llvalue);
+				self.collapse_bit_vec(llres, ty).unwrap_or((llres, int1))
+			}
 
 			Eq if ty.is_pointer() || ty.is_function() => {
 				let intptr = self.abi.llvm_pointer_int(self.ll.ctx);
@@ -1324,13 +1359,13 @@ impl<'a> Emitter<'a> {
 
 
 			Lt if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLT } else { LLVMIntULT }, a.llvalue, b.llvalue), int1),
+			=> (self.ll.icmp(if ty.is_sint() { LLVMIntSLT } else { LLVMIntULT }, a.llvalue, b.llvalue), int1),
 			Gt if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGT } else { LLVMIntUGT }, a.llvalue, b.llvalue), int1),
+			=> (self.ll.icmp(if ty.is_sint() { LLVMIntSGT } else { LLVMIntUGT }, a.llvalue, b.llvalue), int1),
 			Le if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSLE } else { LLVMIntULE }, a.llvalue, b.llvalue), int1),
+			=> (self.ll.icmp(if ty.is_sint() { LLVMIntSLE } else { LLVMIntULE }, a.llvalue, b.llvalue), int1),
 			Ge if ty.is_int()
-			=> (self.ll.icmp(if ty.is_signed() { LLVMIntSGE } else { LLVMIntUGE }, a.llvalue, b.llvalue), int1),
+			=> (self.ll.icmp(if ty.is_sint() { LLVMIntSGE } else { LLVMIntUGE }, a.llvalue, b.llvalue), int1),
 
 			Lt if ty.is_real()
 			=> (self.ll.fcmp(LLVMRealOLT, a.llvalue, b.llvalue), int1),
@@ -1348,21 +1383,21 @@ impl<'a> Emitter<'a> {
 			=> (self.ll.or(a.llvalue, b.llvalue), a.lltype),
 
 
-			BAnd if ty.is_int()
+			BAnd if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.and(a.llvalue, b.llvalue), a.lltype),
-			BOr if ty.is_int()
+			BOr if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.or(a.llvalue, b.llvalue), a.lltype),
-			BXor
+			BXor if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.xor(a.llvalue, b.llvalue), a.lltype),
 
-			LSh
+			LSh if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.l_shift(a.llvalue, b.llvalue), a.lltype),
-			RShA
+			RShA if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.arithmetic_r_shift(a.llvalue, b.llvalue), a.lltype),
-			RShL
+			RShL if ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.logical_r_shift(a.llvalue, b.llvalue), a.lltype),
 
-			_ => unreachable!()
+			x => unreachable!("Cannot perform {:?} on {:?}", x, a.lltype)
 		}
 	}
 
@@ -1371,16 +1406,16 @@ impl<'a> Emitter<'a> {
 		use UnaryOp::*;
 
 		match un_op {
-			Neg if ty.is_sint()
+			Neg if ty.supports_sign_ops(self.ctx).unwrap() && ty.requires_integer_ops(self.ctx).unwrap()
 			=> (self.ll.ineg(e.llvalue), e.lltype),
 
-			Neg if ty.is_real()
+			Neg if ty.supports_sign_ops(self.ctx).unwrap() && ty.requires_real_ops(self.ctx).unwrap()
 			=> (self.ll.fneg(e.llvalue), e.lltype),
 
-			LNot if ty.is_bool()
+			LNot if ty.supports_logical_ops()
 			=> (self.ll.not(e.llvalue), e.lltype),
 
-			BNot if ty.is_int()
+			BNot if ty.supports_bitwise_ops(self.ctx).unwrap()
 			=> (self.ll.not(e.llvalue), e.lltype),
 
 
@@ -1393,10 +1428,10 @@ impl<'a> Emitter<'a> {
 
 		match cast_op {
 			IntToReal if ty.is_int() && target_ty.is_real()
-			=> self.ll.i2f(ty.is_signed(), e.llvalue, lltgt_ty),
+			=> self.ll.i2f(ty.is_sint(), e.llvalue, lltgt_ty),
 
 			RealToInt if ty.is_real() && target_ty.is_int()
-			=> self.ll.f2i(target_ty.is_signed(), e.llvalue, lltgt_ty),
+			=> self.ll.f2i(target_ty.is_sint(), e.llvalue, lltgt_ty),
 
 			ZeroExtend if ty.is_int() && target_ty.is_int()
 			=> self.ll.zext(e.llvalue, lltgt_ty),
@@ -1413,7 +1448,7 @@ impl<'a> Emitter<'a> {
 			RealTruncate if ty.is_real() && target_ty.is_real()
 			=> self.ll.ftrunc(e.llvalue, lltgt_ty),
 
-			Bitcast if ty.is_primitive() || ty.is_pointer()
+			Bitcast if ty.is_primitive() || ty.is_pointer() || ty.is_function()
 			=> self.ll.bitcast(e.llvalue, lltgt_ty),
 
 			Bitcast if ty.is_aggregate()

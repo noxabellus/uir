@@ -886,7 +886,7 @@ impl<'c> Builder<'c> {
 			TyData::Primitive(prim)
 			=> prim.const_zero(),
 
-			TyData::Array { .. }  | TyData::Structure { .. }
+			TyData::Array { .. }  | TyData::Structure { .. } | TyData::Vector { .. }
 			=> Constant::Aggregate(ty_key, ConstantAggregateData::Zeroed),
 		})
 	}
@@ -922,6 +922,12 @@ impl<'c> Builder<'c> {
 		let element_ty = self.get_ty(element_ty)?.as_key();
 
 		Ok(TyManipulator(self.ctx.add_ty(TyData::Array { length, element_ty }.into())))
+	}
+
+	pub fn vector_ty<K: AsKey<TyKey>> (&mut self, length: u32, element_ty: K) -> IrDataResult<TyManipulator> {
+		let element_ty = self.get_ty(element_ty)?.as_key();
+
+		Ok(TyManipulator(self.ctx.add_ty(TyData::Vector { length, element_ty }.into())))
 	}
 
 	pub fn empty_structure_ty (&mut self) -> TyManipulator {
@@ -1042,6 +1048,16 @@ impl<'c> Builder<'c> {
 						let Layout { size: elem_size, align: elem_align, .. } = layout_ref.deref();
 						Layout::custom_scalar(length * *elem_size, *elem_align)
 					},
+
+					&Vector { length, element_ty, .. } => {
+
+						// TODO: properly align this, i dont believe this is currently correct
+
+						let layout_ref = finalize_ty_impl(this, wip, element_ty)?;
+						let Layout { size: elem_size, align: elem_align, .. } = layout_ref.deref();
+						Layout::custom_scalar(length * *elem_size, *elem_align)
+					},
+
 
 					Structure { field_tys } => {
 						let field_tys = field_tys.clone().into_iter();
@@ -1358,6 +1374,7 @@ impl<'x, 'b> FunctionBuilder<'x, 'b> {
 
 	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrDataResult<TyManipulator> { self.builder.pointer_ty(target_ty) }
 	pub fn array_ty<K: AsKey<TyKey>> (&mut self, length: u32, element_ty: K) -> IrDataResult<TyManipulator> { self.builder.array_ty(length, element_ty) }
+	pub fn vector_ty<K: AsKey<TyKey>> (&mut self, length: u32, element_ty: K) -> IrDataResult<TyManipulator> { self.builder.vector_ty(length, element_ty) }
 	pub fn empty_structure_ty (&mut self) -> TyManipulator { self.builder.empty_structure_ty() }
 	pub fn set_structure_ty_body (&mut self, ty_key: TyKey, body: Vec<TyKey>) -> IrDataResult<TyManipulator> { self.builder.set_structure_ty_body(ty_key, body) }
 	pub fn structure_ty (&mut self, field_tys: Vec<TyKey>) -> IrDataResult<TyManipulator> { self.builder.structure_ty(field_tys) }

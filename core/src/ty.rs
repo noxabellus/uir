@@ -1,9 +1,8 @@
 use std::{ fmt, cell::RefCell, ops };
 
-use super::{
-	src::SrcAttribution,
-	ir::{ UnaryOp, BinaryOp, CastOp, BlockKey, Constant, },
-};
+use crate::builder::IrErrData;
+
+use super::{builder::IrDataResult, ir::{BinaryOp, BlockKey, CastOp, Constant, Context, UnaryOp}, src::SrcAttribution};
 
 
 support::slotmap_keyable! { Ty, TyMeta }
@@ -27,6 +26,7 @@ pub enum TyErr {
 	GepOutOfBounds(usize, TyKey, u32, u32),
 	ExpectedTy(TyKey, TyKey),
 	ExpectedArray(TyKey),
+	ExpectedVector(TyKey),
 	ExpectedStructure(TyKey),
 	ExpectedEmptyStructure(TyKey),
 	ExpectedFunction(TyKey),
@@ -145,6 +145,7 @@ pub enum TyData {
 	Primitive(PrimitiveTy),
 	Pointer { target_ty: TyKey },
 	Array { length: u32, element_ty: TyKey },
+	Vector { length: u32, element_ty: TyKey },
 	Structure { field_tys: Vec<TyKey> },
 	Function { parameter_tys: Vec<TyKey>, result_ty: Option<TyKey> },
 }
@@ -167,18 +168,71 @@ impl TyData {
 	pub fn is_uint (&self) -> bool { matches!(self, Self::Primitive(PrimitiveTy::UInt8) | Self::Primitive(PrimitiveTy::UInt16) | Self::Primitive(PrimitiveTy::UInt32) | Self::Primitive(PrimitiveTy::UInt64) | Self::Primitive(PrimitiveTy::UInt128)) }
 	pub fn is_int (&self) -> bool { self.is_sint() || self.is_uint() }
 	pub fn is_real (&self) -> bool { matches!(self, Self::Primitive(PrimitiveTy::Real32) | Self::Primitive(PrimitiveTy::Real64)) }
-	pub fn is_arithmetic (&self) -> bool { self.is_int() || self.is_real() }
-	pub fn has_equality (&self) -> bool { self.is_pointer() || self.is_arithmetic() || self.is_bool() || self.is_function() }
-	pub fn is_signed (&self) -> bool { self.is_sint() || self.is_real() }
 	pub fn is_pointer (&self) -> bool { matches!(self, Self::Pointer { .. }) }
 	pub fn is_array (&self) -> bool { matches!(self, Self::Array { .. }) }
+	pub fn is_vector (&self) -> bool { matches!(self, Self::Vector { .. }) }
 	pub fn is_structure (&self) -> bool { matches!(self, Self::Structure { .. }) }
 	pub fn is_function (&self) -> bool { matches!(self, Self::Function { .. }) }
+
+
+	pub fn requires_real_ops (&self, ctx: &Context) -> IrDataResult<bool> {
+		Ok(match self {
+			x if x.is_real() => true,
+			&Self::Vector { element_ty, .. } => ctx.tys.get(element_ty).ok_or(IrErrData::InvalidTyKey(element_ty))?.requires_real_ops(ctx)?,
+			_ => false
+		})
+	}
+
+	pub fn requires_integer_ops (&self, ctx: &Context) -> IrDataResult<bool> {
+		Ok(match self {
+			x if x.is_int() => true,
+			&Self::Vector { element_ty, .. } => ctx.tys.get(element_ty).ok_or(IrErrData::InvalidTyKey(element_ty))?.requires_integer_ops(ctx)?,
+			_ => false
+		})
+	}
+
+
+	pub fn supports_sign_ops (&self, ctx: &Context) -> IrDataResult<bool> {
+		Ok(match self {
+			x if x.is_sint() || x.is_real() => true,
+			&Self::Vector { element_ty, .. } => ctx.tys.get(element_ty).ok_or(IrErrData::InvalidTyKey(element_ty))?.supports_sign_ops(ctx)?,
+			_ => false
+		})
+	}
+
+	pub fn supports_bitwise_ops (&self, ctx: &Context) -> IrDataResult<bool> {
+		Ok(match self {
+			x if x.is_int() => true,
+			&Self::Vector { element_ty, .. } => ctx.tys.get(element_ty).ok_or(IrErrData::InvalidTyKey(element_ty))?.supports_bitwise_ops(ctx)?,
+			_ => false
+		})
+	}
+
+	pub fn supports_arithmetic_ops (&self) -> bool {
+		self.is_int() || self.is_real() || self.is_vector()
+	}
+
+	pub fn supports_logical_ops (&self) -> bool {
+		self.is_bool()
+	}
+
+	pub fn supports_equality_ops (&self) -> bool {
+		self.is_bool() || self.is_int() || self.is_real() || self.is_vector() || self.is_pointer() || self.is_function()
+	}
+
+	pub fn supports_order_ops (&self) -> bool {
+		self.is_int() || self.is_real()
+	}
+
+	pub fn supports_ops (&self) -> bool {
+		self.is_bool() || self.is_int() || self.is_real() || self.is_vector() || self.is_pointer() || self.is_function()
+	}
 
 	pub fn is_aggregate (&self) -> bool {
 		matches!(self,
 			  Self::Array { .. }
 			| Self::Structure { .. }
+			| Self::Vector { .. }
 		)
 	}
 
