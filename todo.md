@@ -3,6 +3,9 @@
 ## High priority, immediate
 + Handle i128 properly in LLVM abi
 + Handle function comparisons in LLVM backend
++ Add union support
++ Add better alignment support
++ Better optimizer conifg
 
 ## High priority, no plan
 + Create and attach debug information in the LLVM backend
@@ -11,7 +14,6 @@
 ## Low priority
 + Create thorough test suite
 + Add vector types
-+ Add JIT support to LLVM backend on native target
 + Move builder macros to an optional sub crate
 
 ## Random ideas

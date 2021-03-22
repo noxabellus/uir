@@ -14,22 +14,17 @@ pub struct Jit {
 }
 
 impl Jit {
-	pub fn new (emitter: &mut Emitter) -> Self {
-		assert!(emitter.abi.is_native(), "Cannot JIT non-native code");
-
+	pub fn for_module (mut module: LLVMModule) -> Self {
 		unsafe {
+			module.leak();
+
 			assert!(LLVM_InitializeNativeTarget() == LLVM_OK, "Failed to init native target");
 			assert!(LLVM_InitializeNativeAsmPrinter() == LLVM_OK, "Failed to init native asm printer");
 			assert!(LLVM_InitializeNativeAsmParser() == LLVM_OK, "Failed to init native asm parser");
 
 			LLVMLinkInMCJIT();
-		}
 
-		let taken_module = emitter.ll.module.take();
-		let module = taken_module.borrow();
-		taken_module.leak();
 
-		let execution_engine = unsafe {
 			let mut err_msg = MaybeUninit::<*mut i8>::uninit();
 			let mut execution_engine = MaybeUninit::<LLVMExecutionEngineRef>::uninit();
 
@@ -39,13 +34,19 @@ impl Jit {
 				// LLVMDisposeMessage(err_msg);
 			}
 
-			execution_engine.assume_init()
-		};
+			let execution_engine = execution_engine.assume_init();
 
-		Self {
-			module,
-			execution_engine,
+			Self {
+				module,
+				execution_engine,
+			}
 		}
+	}
+
+	pub fn new (emitter: &mut Emitter) -> Self {
+		assert!(emitter.abi.is_native(), "Cannot JIT non-native code");
+
+		Self::for_module(emitter.ll.module.take())
 	}
 
 	pub fn map_global (&mut self, name: impl ToLLVMText, addr: *mut ()) {

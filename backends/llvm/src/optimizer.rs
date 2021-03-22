@@ -61,6 +61,10 @@ impl Optimizer {
 		let function_pass = self.function_pass().expect("valid opt level");
 		unsafe { LLVMRunFunctionPassManager(function_pass, function.into()) == LLVM_TRUE }
 	}
+
+	pub fn module (&self) -> LLVMModule {
+		self.module.borrow()
+	}
 }
 
 

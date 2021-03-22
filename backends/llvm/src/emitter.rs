@@ -84,6 +84,7 @@ impl<'a> Emitter<'a> {
 		let abi = abi::get_abi(ctx.target.as_ref())?;
 
 		let ll = LLVM::new(llvm_str!("UIR_MODULE")); // TODO module names
+		abi.apply_target(ll.module.inner());
 
 		Some(Self {
 			abi,
@@ -389,6 +390,9 @@ impl<'a> Emitter<'a> {
 
 		let func = LLVMValue::create_function(self.module.inner(), abi_llty, llname);
 
+		abi.apply_attributes(self.ll.ctx, func);
+		abi.apply_alignment(func);
+
 		self.functions.insert(function_key, func);
 
 		func
@@ -574,14 +578,15 @@ impl<'a> Emitter<'a> {
 					AggregateData::Indexed(indices) => {
 						let mut out = LLVMValue::zero(llty);
 
+						let elems = fstate.stack.pop_n_to(indices.len()).unwrap().into_inner().into_iter();
+
 						match &ty.data {
 							TyData::Array { length, element_ty } => {
 								let elem_llty = self.emit_ty(*element_ty);
 
-								for &i in indices.iter() {
+								for (&i, elem) in indices.iter().zip(elems) {
 									assert!(i < *length);
 
-									let elem = fstate.stack.pop().unwrap();
 									assert_eq!(elem_llty, elem.lltype);
 
 									out = self.ll.insert_value(out, elem.llvalue, i);
@@ -591,11 +596,10 @@ impl<'a> Emitter<'a> {
 							}
 
 							TyData::Structure { field_tys } => {
-								for &i in indices.iter() {
+								for (&i, elem) in indices.iter().zip(elems) {
 									let field_ty = *field_tys.get(i as usize).unwrap();
 									let field_llty = self.emit_ty(field_ty);
 
-									let elem = fstate.stack.pop().unwrap();
 									assert_eq!(field_llty, elem.lltype);
 
 									out = self.ll.insert_value(out, elem.llvalue, i);
@@ -615,22 +619,24 @@ impl<'a> Emitter<'a> {
 
 						match &ty.data {
 							TyData::Array { length, element_ty } => {
+								let elems = fstate.stack.pop_n_to(*length as usize).unwrap().into_inner().into_iter();
 								let elem_llty = self.emit_ty(*element_ty);
-								for i in 0..*length {
-									let elem = fstate.stack.pop().unwrap();
+
+								for (i, elem) in elems.enumerate() {
 									assert_eq!(elem.lltype, elem_llty);
 
-									out = self.ll.insert_value(out, elem.llvalue, i);
+									out = self.ll.insert_value(out, elem.llvalue, i as _);
 
 									if let Some(name) = name.as_ref() { out.set_name(name) }
 								}
 							}
 
 							TyData::Structure { field_tys } => {
-								for (i, &field_ty) in field_tys.iter().enumerate() {
+								let elems = fstate.stack.pop_n_to(field_tys.len()).unwrap().into_inner().into_iter();
+
+								for (i, (&field_ty, elem)) in field_tys.iter().zip(elems).enumerate() {
 									let field_llty = self.emit_ty(field_ty);
 
-									let elem = fstate.stack.pop().unwrap();
 									assert_eq!(elem.lltype, field_llty);
 
 									out = self.ll.insert_value(out, elem.llvalue, i as u32);

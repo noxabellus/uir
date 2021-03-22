@@ -6,6 +6,14 @@ use crate::wrapper::*;
 
 
 impl Abi for AMD64 {
+	fn triple (&self) -> LLVMString {
+		LLVMString::from("x86_64-pc-linux-gnu")
+	}
+
+	fn datalayout (&self) -> LLVMString {
+		LLVMString::from("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128")
+	}
+
 	fn get_info (&self, ctx: LLVMContextRef, arg_types: &[LLVMType], return_type: LLVMType/*, is_var_args: bool, ProcCallingConvention calling_convention*/ ) -> Function {
 		// f.calling_convention = calling_convention;
 
@@ -34,7 +42,7 @@ fn amd64_type (ctx: LLVMContextRef, ty: LLVMType, indirect_attribute: ArgAttr) -
 		let cls = classify(ty);
 
 		if RegClass::is_mem_cls(cls.as_slice(), indirect_attribute) {
-			Arg::indirect(ty, indirect_attribute)
+			Arg::indirect(ty, indirect_attribute, AMD64.align_of(ty))
 		} else {
 			Arg::direct_cast(ty, RegClass::llreg(ctx, cls.as_slice()))
 		}

@@ -1,4 +1,9 @@
-use llvm_sys::analysis::{LLVMVerifierFailureAction::*};
+use std::collections::HashMap;
+
+use llvm_sys::{
+	bit_reader::LLVMParseBitcodeInContext2,
+	analysis::{LLVMVerifierFailureAction::*},
+};
 
 use {
 	// std::{
@@ -27,6 +32,69 @@ use {
 	},
 };
 
+
+fn llvm_from_c (c_code: &str) -> LLVMModuleRef {
+	use std::process::{ Command, Stdio };
+	use std::io::Write;
+
+	// clang -xc -c -emit-llvm -o- -
+	let mut clang =
+		Command::new("clang")
+			.arg("-xc")
+			.arg("-c")
+			.arg("-emit-llvm")
+			// .arg("-O3")
+			.arg("-o-")
+			.arg("-")
+			.stdin(Stdio::piped())
+			.stdout(Stdio::piped())
+			.spawn()
+			.unwrap();
+
+	// echo $c_code | clang -xc -c -emit-llvm -o- -
+	clang.stdin.as_mut().unwrap().write_all(c_code.as_bytes()).unwrap();
+
+	// clang_output=$(echo $c_code | clang -xc -c -emit-llvm -o- -)
+	let clang_output = clang.wait_with_output().unwrap().stdout;
+
+	llvm_from_bitcode(&clang_output)
+}
+
+fn llvm_from_bitcode (bit_code: &[u8]) -> LLVMModuleRef {
+	use std::mem::MaybeUninit;
+
+	unsafe {
+		let context = LLVMContextCreate(); // TODO: this is a memory leak
+		let mut module = MaybeUninit::uninit();
+
+		let buff = LLVMCreateMemoryBufferWithMemoryRange(bit_code.as_ptr() as *const _, bit_code.len() as _, llvm_str!("bitcode").as_ptr(), LLVM_FALSE);
+		assert!(LLVMParseBitcodeInContext2(context, buff, module.as_mut_ptr()) == LLVM_OK, "Cannot load bitcode module");
+		LLVMDisposeMemoryBuffer(buff);
+
+		module.assume_init()
+	}
+}
+
+// fn llvm_from_text (ir_code: &str) -> LLVMModuleRef {
+// 	use std::process::{ Command, Stdio };
+// 	use std::io::Write;
+
+// 	// llvm-as
+// 	let mut llvm_as =
+// 		Command::new("llvm-as")
+// 			.stdin(Stdio::piped())
+// 			.stdout(Stdio::piped())
+// 			.spawn()
+// 			.unwrap();
+
+// 	// echo $ir_code | llvm_as
+// 	llvm_as.stdin.as_mut().unwrap().write_all(ir_code.as_bytes()).unwrap();
+
+// 	// llvm_as_output=$(echo $ir_code | llvm-as)
+// 	let llvm_as_output = llvm_as.wait_with_output().unwrap().stdout;
+
+// 	llvm_from_bitcode(&llvm_as_output)
+// }
 
 // fn get_log_path (file: &str) -> PathBuf {
 // 	static X: AtomicBool = AtomicBool::new(false);
@@ -272,7 +340,6 @@ fn fib () -> IrResult {
 
 
 #[test]
-#[cfg(feature = "jit")]
 fn jit_fib () -> IrResult {
 	let mut context = Context::with_target(target::AMD64);
 	let mut builder = Builder::new(&mut context);
@@ -620,7 +687,7 @@ fn structures () {
 					f.gep(2);
 					f.load();
 
-					f.binary_op(BinaryOp::Add);
+					f.binary_op(BinaryOp::Mul);
 				}
 			} else { unreachable!() }
 
@@ -643,10 +710,401 @@ fn structures () {
 	}
 }
 
+
+
+
+#[test]
+fn structures_jit () {
+	let mut context = Context::with_target(target::AMD64);
+	let mut builder = Builder::new(&mut context);
+
+	let r32 = builder.real32_ty().as_key();
+	let r64 = builder.real64_ty().as_key();
+
+
+	let r32x2 = structure_ty!(builder, "r32x2" => {
+		r32, r32
+	}).as_key();
+
+	let r32x4  = structure_ty!(builder, "r32x4" => {
+		r32, r32, r32, r32
+	}).as_key();
+
+	let r32x8  = structure_ty!(builder, "r32x8" => {
+		r32, r32, r32, r32, r32, r32, r32, r32
+	}).as_key();
+
+
+	let r64x2 = structure_ty!(builder, "r64x2" => {
+		r64, r64
+	}).as_key();
+
+	let r64x4  = structure_ty!(builder, "r64x4" => {
+		r64, r64, r64, r64
+	}).as_key();
+
+	let r64x8  = structure_ty!(builder, "r64x8" => {
+		r64, r64, r64, r64, r64, r64, r64, r64
+	}).as_key();
+
+
+
+	#[repr(C)]
+	#[derive(Debug, PartialEq, Clone, Copy)]
+	#[allow(non_camel_case_types)]
+	struct r32x2 {
+		x: f32,
+		y: f32,
+	}
+
+	#[repr(C)]
+	#[derive(Debug, PartialEq, Clone, Copy)]
+	#[allow(non_camel_case_types)]
+	struct r32x4 {
+		x: f32,
+		y: f32,
+		z: f32,
+		w: f32,
+	}
+
+	#[repr(C)]
+	#[derive(Debug, PartialEq, Clone, Copy)]
+	#[allow(non_camel_case_types)]
+	struct r32x8 {
+		x0: f32,
+		y0: f32,
+		z0: f32,
+		w0: f32,
+		x1: f32,
+		y1: f32,
+		z1: f32,
+		w1: f32,
+	}
+
+	#[repr(C)]
+	#[derive(Debug, PartialEq, Clone, Copy)]
+	#[allow(non_camel_case_types)]
+	struct r64x2 {
+		x: f64,
+		y: f64,
+	}
+
+	#[repr(C)]
+	#[derive(Debug, PartialEq, Clone, Copy)]
+	#[allow(non_camel_case_types)]
+	struct r64x4 {
+		x: f64,
+		y: f64,
+		z: f64,
+		w: f64,
+	}
+
+	#[repr(C)]
+	#[derive(Debug, PartialEq, Clone, Copy)]
+	#[allow(non_camel_case_types)]
+	struct r64x8 {
+		x0: f64,
+		y0: f64,
+		z0: f64,
+		w0: f64,
+		x1: f64,
+		y1: f64,
+		z1: f64,
+		w1: f64,
+	}
+
+
+
+	let mut ret_tests = HashMap::<TyKey, fn (*const())>::new();
+
+	ret_tests.insert(r32x2, |func| {
+		let func: extern "C" fn () -> r32x2 = unsafe { std::mem::transmute(func) };
+
+		assert_eq!(dbg!(func()), r32x2 { x: 0., y: 1. });
+	});
+
+	ret_tests.insert(r32x4, |func| {
+		let func: extern "C" fn () -> r32x4 = unsafe { std::mem::transmute(func) };
+
+		assert_eq!(dbg!(func()), r32x4 { x: 0., y: 1., z: 2., w: 3. });
+	});
+
+	ret_tests.insert(r32x8, |func| {
+		let func: extern "C" fn () -> r32x8 = unsafe { std::mem::transmute(func) };
+
+		assert_eq!(dbg!(func()), r32x8 { x0: 0., y0: 1., z0: 2., w0: 3., x1: 4., y1: 5., z1: 6., w1: 7. });
+	});
+
+
+	ret_tests.insert(r64x2, |func| {
+		let func: extern "C" fn () -> r64x2 = unsafe { std::mem::transmute(func) };
+
+		assert_eq!(dbg!(func()), r64x2 { x: 0., y: 1. });
+	});
+
+	ret_tests.insert(r64x4, |func| {
+		let func: extern "C" fn () -> r64x4 = unsafe { std::mem::transmute(func) };
+
+		assert_eq!(dbg!(func()), r64x4 { x: 0., y: 1., z: 2., w: 3. });
+	});
+
+	ret_tests.insert(r64x8, |func| {
+		let func: extern "C" fn () -> r64x8 = unsafe { std::mem::transmute(func) };
+
+		assert_eq!(dbg!(func()), r64x8 { x0: 0., y0: 1., z0: 2., w0: 3., x1: 4., y1: 5., z1: 6., w1: 7. });
+	});
+
+	for &ty in &[
+		r32x2, r32x4, r32x8,
+		r64x2, r64x4, r64x8,
+	] {
+		let mut f = builder.create_function();
+
+		let fn_name = format!("returns_{}", f.get_ty(ty).unwrap().into_ref().name.as_deref().unwrap_or("anon"));
+
+		f.set_name(&fn_name);
+		f.set_return_ty(ty);
+
+		block!(f, "entry" {
+			if let TyData::Structure { field_tys } = &f.get_ty(ty).unwrap().data {
+				let field_tys = field_tys.clone(); // TODO: this really is a borrow checker fail, but is there any way to make this better?
+
+				for (i, &field_ty) in field_tys.iter().enumerate() {
+					let value = f.get_ty(field_ty).unwrap().const_from_int(i).unwrap();
+
+					f.constant(value);
+				}
+			} else { unreachable!() }
+
+			f.build_aggregate(ty, AggregateData::Complete);
+			f.ret();
+		});
+
+
+		let BuilderResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
+
+		let printer = PrinterState::new(&builder.ctx).with_possible_error(error);
+
+		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
+
+		let mut emitter = Emitter::new(&builder.ctx).unwrap();
+		let llfunction = emitter.emit_function(function);
+
+		println!("{:#?}\n{:#?}", emitter.emit_ty(ty), llfunction);
+
+		llfunction.verify_function(LLVMAbortProcessAction);
+
+		let mut optimizer = Optimizer::with_level(&emitter, 3);
+
+		optimizer.optimize(llfunction);
+		println!("optimized ir:\n{:#?}", optimizer.module().inner());
+
+
+		let mut jit = Jit::new(&mut emitter);
+
+		let llfn_name = LLVMString::from(fn_name);
+		let func = jit.get_function(llfn_name);
+		assert!(!func.is_null());
+		ret_tests[&ty](func);
+	}
+
+
+	let mut ret_tests = HashMap::<TyKey, fn (*const())>::new();
+
+	#[allow(clippy::float_cmp)] {
+		ret_tests.insert(r32x2, |func| {
+			type FnTy = extern "C" fn (r32x2) -> f32;
+
+			let func: FnTy = unsafe { std::mem::transmute(func) };
+
+			let input = r32x2 { x: 2., y: 3. };
+
+			let nat_func = |v: r32x2| -> f32 { v.x * v.y };
+
+			let func_output = func(input);
+			let nat_func_output = nat_func(input);
+
+			println!("input: {:?}", input);
+			println!("uir:\t{}", func_output);
+			println!("nat:\t{}", nat_func_output);
+
+			assert_eq!(func_output, nat_func_output);
+		});
+
+		ret_tests.insert(r32x4, |func| {
+			type FnTy = extern "C" fn (r32x4) -> f32;
+
+			let func: FnTy = unsafe { std::mem::transmute(func) };
+
+			let input = r32x4 { x: 2., y: 3., z: 4., w: 5. };
+
+			let nat_func = |v: r32x4| -> f32 { v.x * v.y * v.z * v.w };
+
+			let func_output = func(input);
+			let nat_func_output = nat_func(input);
+
+			println!("input: {:?}", input);
+			println!("uir:\t{}", func_output);
+			println!("nat:\t{}", nat_func_output);
+
+			assert_eq!(func_output, nat_func_output);
+		});
+
+		ret_tests.insert(r32x8, |func| {
+			type FnTy = extern "C" fn (r32x8) -> f32;
+
+			let func: FnTy = unsafe { std::mem::transmute(func) };
+
+			let input = r32x8 { x0: 2., y0: 3., z0: 4., w0: 5., x1: 6., y1: 7., z1: 8., w1: 9. };
+
+			let nat_func = |v: r32x8| -> f32 { v.x0 * v.y0 * v.z0 * v.w0 * v.x1 * v.y1 * v.z1 * v.w1 };
+
+			let func_output = func(input);
+			let nat_func_output = nat_func(input);
+
+			println!("input: {:?}", input);
+			println!("uir:\t{}", func_output);
+			println!("nat:\t{}", nat_func_output);
+
+			assert_eq!(func_output, nat_func_output);
+		});
+
+
+		ret_tests.insert(r64x2, |func| {
+			type FnTy = extern "C" fn (r64x2) -> f64;
+
+			let func: FnTy = unsafe { std::mem::transmute(func) };
+
+			let input = r64x2 { x: 2., y: 3. };
+
+			let nat_func = |v: r64x2| -> f64 { v.x * v.y };
+
+			let func_output = func(input);
+			let nat_func_output = nat_func(input);
+
+			println!("input: {:?}", input);
+			println!("uir:\t{}", func_output);
+			println!("nat:\t{}", nat_func_output);
+
+			assert_eq!(func_output, nat_func_output);
+		});
+
+		ret_tests.insert(r64x4, |func| {
+			type FnTy = extern "C" fn (r64x4) -> f64;
+
+			let func: FnTy = unsafe { std::mem::transmute(func) };
+
+			let input = r64x4 { x: 2., y: 3., z: 4., w: 5. };
+
+			let nat_func = |v: r64x4| -> f64 { v.x * v.y * v.z * v.w };
+
+			let func_output = func(input);
+			let nat_func_output = nat_func(input);
+
+			println!("input: {:?}", input);
+			println!("uir:\t{}", func_output);
+			println!("nat:\t{}", nat_func_output);
+
+			assert_eq!(func_output, nat_func_output);
+		});
+
+		ret_tests.insert(r64x8, |func| {
+			type FnTy = extern "C" fn (r64x8) -> f64;
+
+			let func: FnTy = unsafe { std::mem::transmute(func) };
+
+			let input = r64x8 { x0: 2., y0: 3., z0: 4., w0: 5., x1: 6., y1: 7., z1: 8., w1: 9. };
+
+			let nat_func = |v: r64x8| -> f64 { v.x0 * v.y0 * v.z0 * v.w0 * v.x1 * v.y1 * v.z1 * v.w1 };
+
+			let func_output = func(input);
+			let nat_func_output = nat_func(input);
+
+			println!("input: {:?}", input);
+			println!("uir:\t{}", func_output);
+			println!("nat:\t{}", nat_func_output);
+
+			assert_eq!(func_output, nat_func_output);
+		});
+	}
+
+
+
+	for &ty in &[
+		r32x2, r32x4, r32x8,
+		r64x2, r64x4, r64x8,
+	] {
+		let mut f = builder.create_function();
+
+		let fn_name = format!("{}_product", f.get_ty(ty).unwrap().into_ref().name.as_deref().unwrap_or("anon"));
+		f.set_name(&fn_name);
+		let param = f.append_param(ty).as_key();
+
+		block!(f, "entry" {
+			if let TyData::Structure { field_tys } = &f.get_ty(ty).unwrap().data {
+				let mut field_tys = field_tys.clone(); // TODO: this really is a borrow checker fail, but is there any way to make this better?
+
+				let first = field_tys.remove(0);
+				f.set_return_ty(first);
+
+				f.param_ref(param);
+				f.const_uint32(0);
+				f.const_uint32(0);
+				f.gep(2);
+				f.load();
+
+				for (i, _) in field_tys.into_iter().enumerate() {
+					f.param_ref(param);
+					f.const_uint32(0);
+					f.const_uint32(i as u32 + 1);
+					f.gep(2);
+					f.load();
+
+					f.binary_op(BinaryOp::Mul);
+				}
+			} else { unreachable!() }
+
+			f.ret();
+		});
+
+
+		let BuilderResult { value: function, error } = f.finalize().map(FunctionManipulator::into_key);
+
+		let printer = PrinterState::new(&builder.ctx).with_possible_error(error);
+
+		println!("{}\n{}", printer.print_ty(ty), printer.print_function(function));
+
+		let mut emitter = Emitter::new(&builder.ctx).unwrap();
+		let llfunction = emitter.emit_function(function);
+
+		println!("{:#?}\n{:#?}", emitter.emit_ty(ty), llfunction);
+
+		llfunction.verify_function(LLVMAbortProcessAction);
+
+
+		let mut optimizer = Optimizer::with_level(&emitter, 3);
+		optimizer.optimize(llfunction);
+		println!("optimized ir:");
+		unsafe { LLVMDumpModule(optimizer.module().inner()) }
+
+		if let Some(ret_test) = ret_tests.get(&ty) {
+			let mut jit = Jit::new(&mut emitter);
+
+			let llfn_name = LLVMString::from(fn_name);
+			let func = jit.get_function(llfn_name);
+			assert!(!func.is_null());
+			ret_test(func);
+		} else {
+			println!("SKIPPING TEST");
+		}
+	}
+}
+
+
+
 #[test]
 fn hacky_abi_test () {
 
-	use llvm_sys::bit_reader::LLVMParseBitcodeInContext2;
     use uir_core::{builder, ir, support::slotmap::AsKey};
 
 	macro_rules! build_c_abi_str {
@@ -728,40 +1186,6 @@ typedef unsigned long uint64_ty;
 	}
 
 
-
-
-	fn llvm_from_c (c_code: &str) -> LLVMModuleRef {
-		// echo "int main () { return 1; }" | clang -xc -c -emit-llvm -o- - | llvm-dis
-		use std::process::{ Command, Stdio };
-		use std::io::Write;
-		use std::mem::MaybeUninit;
-		let mut clang =
-			Command::new("clang")
-				.arg("-xc")
-				.arg("-c")
-				.arg("-emit-llvm")
-				.arg("-o-")
-				.arg("-")
-				.stdin(Stdio::piped())
-				.stdout(Stdio::piped())
-				.spawn()
-				.unwrap();
-
-		clang.stdin.as_mut().unwrap().write_all(c_code.as_bytes()).unwrap();
-
-		let clang_output = clang.wait_with_output().unwrap().stdout;
-
-		unsafe {
-			let context = LLVMContextCreate();
-			let mut module = MaybeUninit::uninit();
-
-			let buff = LLVMCreateMemoryBufferWithMemoryRange(clang_output.as_ptr() as *const _, clang_output.len() as _, llvm_str!("harness bitcode").as_ptr(), LLVM_FALSE);
-			assert!(LLVMParseBitcodeInContext2(context, buff, module.as_mut_ptr()) == LLVM_OK, "Cannot load bitcode harness module");
-			LLVMDisposeMemoryBuffer(buff);
-
-			module.assume_init()
-		}
-	}
 
 	fn build_abi_tests () {
 		build_abi_tests! {

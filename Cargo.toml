@@ -14,12 +14,13 @@ path = "./driver.rs"
 [dependencies]
 support = { package = "uir-support", path = "./support" }
 core = { package = "uir-core", path = "./core" }
-llvm-backend = { package = "uir-llvm-backend", path = "./backends/llvm", optional = true }
 cli = { package = "uir-cli", path = "./cli" }
+llvm-backend = { package = "uir-llvm-backend", path = "./backends/llvm", optional = true }
 
 
 [features]
 default = ["llvm-backend"]
+
 
 [workspace]
 members = [ "./support", "./core", "./backends/llvm", "./cli" ]

@@ -4,10 +4,6 @@ version = "0.1.0"
 authors = ["noxabellus <noxabellus@gmail.com>"]
 edition = "2018"
 
-[features]
-jit = []
-default = ["jit"]
-
 [dependencies]
 llvm-sys = "100"
 uir-core = { path = "../../core" }

@@ -10,9 +10,7 @@ pub use emitter::Emitter;
 pub mod optimizer;
 pub use optimizer::Optimizer;
 
-#[cfg(feature = "jit")]
 pub mod jit;
-#[cfg(feature = "jit")]
 pub use jit::Jit;
 
 #[cfg(test)]

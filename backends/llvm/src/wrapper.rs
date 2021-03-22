@@ -20,6 +20,19 @@ pub struct LLVMModule {
 	llmod: LLVMModuleRef,
 }
 
+impl fmt::Debug for LLVMModule {
+	fn fmt (&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let alloc = unsafe { LLVMPrintModuleToString(self.llmod) };
+		let s = unsafe { std::ffi::CStr::from_ptr(alloc).to_str().unwrap_or("[Err printing llvm module to string]") };
+
+		write!(f, "{}", s)?;
+
+		unsafe { LLVMDisposeMessage(alloc) }
+
+		Ok(())
+	}
+}
+
 impl LLVMModule {
 	pub fn owned (llmod: LLVMModuleRef) -> Self {
 		Self { ownership: Ownership::Owned, llmod }
@@ -51,14 +64,20 @@ impl LLVMModule {
 		}
 	}
 
-	pub fn leak (self) -> LLVMModuleRef {
+	/// # Safety
+	/// You are taking ownership of the LLVMModuleRef
+	pub unsafe fn leak (&mut self)  {
+		assert!(self.ownership == Ownership::Owned);
+		self.ownership = Ownership::Borrowed;
+	}
+
+	/// # Safety
+	/// You are taking ownership of the LLVMModuleRef
+	pub unsafe fn leak_inner (mut self) -> LLVMModuleRef {
 		assert!(self.ownership == Ownership::Owned);
 
-		let x = self.llmod;
-
-		std::mem::forget(self);
-
-		x
+		self.leak();
+		self.llmod
 	}
 
 	pub fn inner (&self) -> LLVMModuleRef {
@@ -68,12 +87,20 @@ impl LLVMModule {
 
 impl Drop for LLVMModule {
 	fn drop (&mut self) {
-		if self.is_owned() { unsafe { LLVMDisposeModule(self.llmod) } }
+		// dbg!("dropping module");
+		if self.is_owned() {
+			// TODO: wtf even is memory management, LLVM?
+			// this causes a segfault when `LLVM` goes out of scope, even if there is only ever one owning instance of LLVMModule
+			// dbg!("disposing module");
+			// unsafe { LLVMDisposeModule(self.llmod) }
+		}
 	}
 }
 
 
-unsafe fn strlen (p: *const i8) -> usize {
+/// # Safety
+/// Equivalent to libc
+pub unsafe fn strlen (p: *const i8) -> usize {
 	let mut len = 0;
 	while *p.add(len) != 0 { len += 1; }
 	len
@@ -1300,6 +1327,11 @@ impl LLVMValue {
 		assert!(self.is_function_kind());
 
 		unsafe { LLVMCountParams(self.into()) }
+	}
+
+	pub fn get_param (self, index: u32) -> LLVMValue {
+		assert!(index < self.count_params());
+		unsafe { LLVMGetParam(self.into(), index).into() }
 	}
 
 	pub fn get_params (self) -> Vec<LLVMValue> {

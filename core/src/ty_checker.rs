@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem};
+use std::{collections::HashMap, mem, vec::IntoIter};
 
 use support::{
 	slotmap::{ AsKey, Keyed },
@@ -146,7 +146,23 @@ impl OpStack {
 		self.reverse();
 		self
 	}
+
+	pub fn into_inner (self) -> Vec<(TyKey, Option<Constant>)> {
+		self.entries.into_inner()
+	}
 }
+
+impl IntoIterator for OpStack {
+	type Item = (TyKey, Option<Constant>);
+	type IntoIter = IntoIter<Self::Item>;
+
+	fn into_iter (self) -> Self::IntoIter {
+		let mut inner = self.into_inner();
+		inner.reverse();
+		inner.into_iter()
+	}
+}
+
 
 
 
@@ -595,18 +611,17 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 					=> {
 						match &ty.data {
 							&TyData::Array { length, element_ty } => {
-								for i in 0..length {
-									let operand_ty = self.stack.pop()?;
-
-									assert(self.ty_ck(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i, element_ty, operand_ty))?;
+								let operand_tys = self.stack.pop_n_to(length as usize)?.reversed().into_inner().into_iter();
+								for (i, (operand_ty, _)) in operand_tys.enumerate() {
+									assert(self.ty_ck(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as _, element_ty, operand_ty))?;
 								}
 							},
 
 							TyData::Structure { field_tys } => {
-								for (i, &field_ty) in field_tys.iter().enumerate() {
-									let operand_ty = self.stack.pop()?;
+								let operand_tys = self.stack.pop_n_to(field_tys.len())?.reversed().into_inner().into_iter();
 
-									assert(self.ty_ck(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as u32, field_ty, operand_ty))?;
+								for (i, (&field_ty, (operand_ty, _))) in field_tys.iter().zip(operand_tys).enumerate() {
+									assert(self.ty_ck(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as _, field_ty, operand_ty))?;
 								}
 							}
 
@@ -623,21 +638,20 @@ impl<'r, 'b, 'f> TyChecker<'r, 'b, 'f> {
 							}
 						}
 
+						let operand_tys = self.stack.pop_n_to(indices.len())?.into_inner().into_iter();
+
 						match &ty.data {
 							&TyData::Array { length, element_ty } => {
-								for &i in indices.iter() {
+								for (&i, (operand_ty, _)) in indices.iter().zip(operand_tys) {
 									assert(i < length, TyErr::InvalidAggregateIndex(*ty_key, i))?;
-
-									let operand_ty = self.stack.pop()?;
 
 									assert(self.ty_ck(element_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i, element_ty, operand_ty))?;
 								}
 							},
 
 							TyData::Structure { field_tys } => {
-								for &i in indices.iter() {
+								for (&i, (operand_ty, _)) in indices.iter().zip(operand_tys) {
 									let field_ty = *field_tys.get(i as usize).ok_or(TyErr::InvalidAggregateIndex(*ty_key, i))?;
-									let operand_ty = self.stack.pop()?;
 
 									assert(self.ty_ck(field_ty, operand_ty), TyErr::ExpectedAggregateElementTy(*ty_key, i as u32, field_ty, operand_ty))?;
 								}

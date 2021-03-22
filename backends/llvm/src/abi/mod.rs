@@ -25,9 +25,13 @@ pub enum ArgAttr {
 }
 
 impl ArgAttr {
-	pub fn as_cstr (self) -> &'static [i8] {
+	pub fn applies_to_ret (self) -> bool {
+		matches!(self, Self::ZExt)
+	}
+
+	pub fn as_cstr (self) -> *const i8 {
 		use ArgAttr::*;
-		unsafe { *(match self {
+		(match self {
 			SRet => "sret\0",
 			ZExt => "zext\0",
 			ByVal => "byval\0",
@@ -36,35 +40,13 @@ impl ArgAttr {
 			// NoAlias => "noalias\0",
 			// NonNull => "nonnull\0",
 			// NoCapture => "nocapture\0",
-		} as *const _ as *const _) }
+		}) as *const _ as *const _
 	}
 
-	pub fn to_llvm (self, ctx: LLVMContextRef) -> Option<LLVMAttributeRef> {
-		use ArgAttr::*;
-		if matches!(self,
-			  SRet
-			| ZExt
-			| ByVal
-			// | NoAlias
-			// | NonNull
-			// | NoCapture
-		) {
-			// if cfg!(debug_assertions) {
-				// eprintln!("Warning: {:?} does not support conversion to LLVM yet; returning None", self);
-			// }
+	pub fn to_llvm (self, ctx: LLVMContextRef) -> LLVMAttributeRef {
+		let name = self.as_cstr();
 
-			None
-		} else {
-			let name = self.as_cstr();
-
-			Some(unsafe { LLVMCreateEnumAttribute(ctx, LLVMGetEnumAttributeKindForName(name.as_ptr(), name.len() as _), 1) })
-		}
-	}
-
-	pub fn apply (self, ctx: LLVMContextRef, func: LLVMValue, index: u32) {
-		if let Some(llattr) = self.to_llvm(ctx) {
-			unsafe { LLVMAddAttributeAtIndex(func.into(), index, llattr) }
-		}
+		unsafe { LLVMCreateEnumAttribute(ctx, LLVMGetEnumAttributeKindForName(name, strlen(name)), 1) }
 	}
 }
 
@@ -82,6 +64,7 @@ pub struct Arg {
 	pub cast_types: Vec<LLVMType>,
 	// pub pad_type: Option<LLVMType>,
 	pub attribute: Option<ArgAttr>,
+	pub preferred_align: Option<u32>,
 }
 
 impl Arg {
@@ -89,7 +72,8 @@ impl Arg {
 		Self {
 			kind: ArgKind::Direct,
 			base_type, cast_types,
-			attribute
+			attribute,
+			preferred_align: None,
 		}
 	}
 
@@ -106,12 +90,13 @@ impl Arg {
 	}
 
 
-	fn indirect (base_type: LLVMType, attribute: ArgAttr) -> Self {
+	fn indirect (base_type: LLVMType, attribute: ArgAttr, preferred_align: u32) -> Self {
 		Self {
 			kind: ArgKind::Indirect,
 			base_type,
 			cast_types: vec![],
-			attribute: Some(attribute)
+			attribute: Some(attribute),
+			preferred_align: Some(preferred_align),
 		}
 	}
 
@@ -191,21 +176,29 @@ impl Function {
 	}
 
 	pub fn apply_attributes (&self, ctx: LLVMContextRef, func: LLVMValue, /* ProcCallingConvention calling_convention */) {
-		let offset: u32 = if self.result.kind == ArgKind::Indirect { 1 } else { 0 };
-
-		for (i, arg) in self.args.iter().enumerate() {
-			// if arg.kind == ArgKind::Ignore { continue }
-
-			if let Some(attribute) = arg.attribute {
-				attribute.apply(ctx, func, i as u32 + offset + 1);
+		let mut j = if self.result.kind == ArgKind::Indirect {
+			if let Some(attr) = self.result.attribute {
+				unsafe { LLVMAddAttributeAtIndex(func.into(), 1, attr.to_llvm(ctx)) }
 			}
-		}
 
-		if offset != 0 {
-			if let Some(attribute) = self.result.attribute {
-				attribute.apply(ctx, func, offset);
-				// TODO: ArgAttr::NoAlias.apply(ctx, func, offset);
+			2
+		} else {
+			if LLVMType::of(func).get_return_type() != LLVMType::void(ctx) {
+				if let Some(attr) = self.result.attribute {
+					assert!(attr.applies_to_ret());
+					unsafe { LLVMAddAttributeAtIndex(func.into(), 0, attr.to_llvm(ctx)) }
+				}
 			}
+
+			1
+		};
+
+		for arg in self.args.iter() {
+			if let Some(attr) = arg.attribute {
+				unsafe { LLVMAddAttributeAtIndex(func.into(), j, attr.to_llvm(ctx)) }
+			}
+
+			j += arg.cast_types.len().min(1) as u32;
 		}
 
 		// lbCallingConventionKind cc_kind = lbCallingConvention_C;
@@ -213,6 +206,32 @@ impl Function {
 		// 	cc_kind = lb_calling_convention_map[calling_convention];
 		// }
 		// LLVMSetFunctionCallConv(func, cc_kind);
+	}
+
+	pub fn apply_alignment (&self, func: LLVMValue) {
+		let mut j = 0;
+
+		if self.result.kind == ArgKind::Indirect {
+			let param = func.get_param(0);
+			// let align = self.result.preferred_align.unwrap(); // TODO: why is this wrong? is it supposed to be ptr alignment?
+			let align = 8;
+
+			unsafe { LLVMSetParamAlignment(param.into(), align) }
+
+			j = 1;
+		}
+
+		for arg in self.args.iter() {
+			if arg.kind == ArgKind::Indirect {
+				let param = func.get_param(j);
+				// let align = arg.preferred_align.unwrap();
+				let align = 8;
+
+				unsafe { LLVMSetParamAlignment(param.into(), align) }
+			}
+
+			j += arg.cast_types.len().min(1) as u32;
+		}
 	}
 }
 
@@ -223,6 +242,16 @@ fn llvm_align_formula (offset: u32, align: u32) -> u32 {
 }
 
 pub trait Abi: Target {
+	fn triple (&self) -> LLVMString;
+	fn datalayout (&self) -> LLVMString;
+
+	fn apply_target (&self, llmod: LLVMModuleRef) {
+		unsafe {
+			LLVMSetTarget(llmod, self.triple().as_ptr());
+			LLVMSetDataLayout(llmod, self.datalayout().as_ptr());
+		}
+	}
+
 	fn get_info (&self, context: LLVMContextRef, args: &[LLVMType], ret_ty: LLVMType) -> Function;
 	fn word_bits (&self) -> u32 {
 		self.word_size() as u32 * 8
