@@ -1,12 +1,12 @@
 use std::{fmt, ops};
 
-use support::slotmap::{KeyedMut, Slotmap};
+use support::slotmap::{KeyedMut, Slotmap, AsKey};
 
 use super::{
 	cfg::Cfg,
 	src::{Src, SrcAttribution, SrcKey},
 	target::Target,
-	ty::{Ty, TyKey, TyMeta, TyMetaKey},
+	ty::*,
 	ty_checker::TyMap,
 };
 
@@ -465,32 +465,96 @@ impl Meta {
 
 
 
+
 #[derive(Debug, Default)]
+pub struct TyDict {
+	pub void: TyKey,
+	pub block: TyKey,
+	pub bool: TyKey,
+	pub sint8: TyKey, pub sint16: TyKey, pub sint32: TyKey, pub sint64: TyKey, pub sint128: TyKey,
+	pub uint8: TyKey, pub uint16: TyKey, pub uint32: TyKey, pub uint64: TyKey, pub uint128: TyKey,
+	pub real32: TyKey, pub real64: TyKey,
+}
+
+
+#[derive(Debug)]
 pub struct Context {
 	pub target: Box<dyn Target>,
 
 	pub srcs: Slotmap<SrcKey, Src>,
 
 	pub tys: Slotmap<TyKey, Ty>,
+	pub ty_dict: TyDict,
 	pub functions: Slotmap<FunctionKey, Function>,
 	pub globals: Slotmap<GlobalKey, Global>,
 
 	pub meta: Meta,
 }
 
+impl Default for Context { fn default () -> Self { Self::new() } }
+
 impl Context {
-	pub fn new() -> Self {
-		Self::default()
+	pub fn new () -> Self {
+		let mut ctx = Self {
+			target: Box::default(),
+			srcs: Slotmap::default(),
+			tys: Slotmap::default(),
+			ty_dict: TyDict::default(),
+			functions: Slotmap::default(),
+			globals: Slotmap::default(),
+			meta: Meta::default(),
+		};
+
+		macro_rules! prims {
+			($(
+				($name:ident : $($tt:tt)+)
+			),+ $(,)?) => {
+				TyDict {
+					$(
+						$name: prims!(#ELEM# $name : $($tt)+)
+					),+
+				}
+			};
+
+			(#ELEM# $name:ident : $ty:ident) => {
+				ctx.add_ty(Ty {
+					data: TyData::Primitive(PrimitiveTy::$ty),
+					name: Some(stringify!($name).to_owned()),
+					.. Ty::default()
+				}).as_key()
+			};
+
+
+			(#ELEM# $name:ident : $expr:expr) => {
+				ctx.add_ty(Ty {
+					data: $expr,
+					name: Some(stringify!($name).to_owned()),
+					.. Ty::default()
+				}).as_key()
+			};
+		}
+
+
+		ctx.ty_dict = prims! [
+			(void: TyData::Void),
+			(block: TyData::Block),
+			(bool: Bool),
+			(sint8: SInt8), (sint16: SInt16), (sint32: SInt32), (sint64: SInt64), (sint128: SInt128),
+			(uint8: UInt8), (uint16: UInt16), (uint32: UInt32), (uint64: UInt64), (uint128: UInt128),
+			(real32: Real32), (real64: Real64),
+		];
+
+		ctx
 	}
 
-	pub fn with_target<T: 'static + Target>(target: T) -> Self {
+	pub fn with_target<T: 'static + Target> (target: T) -> Self {
 		Self {
 			target: Box::new(target),
 			..Self::default()
 		}
 	}
 
-	pub(crate) fn add_ty(&mut self, ty: Ty) -> KeyedMut<Ty> {
+	pub(crate) fn add_ty (&mut self, ty: Ty) -> KeyedMut<Ty> {
 		self.tys.insert(ty)
 	}
 }

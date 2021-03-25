@@ -807,67 +807,15 @@ impl<'c, T: RichUnwrap<'c>> BuilderResult<T, IrErr> {
 }
 
 
-
-#[derive(Debug, Default)]
-pub struct TyDict {
-	void: TyKey,
-	block: TyKey,
-	bool: TyKey,
-	sint8: TyKey, sint16: TyKey, sint32: TyKey, sint64: TyKey, sint128: TyKey,
-	uint8: TyKey, uint16: TyKey, uint32: TyKey, uint64: TyKey, uint128: TyKey,
-	real32: TyKey, real64: TyKey,
-}
-
 #[derive(Debug)]
 pub struct Builder<'c> {
 	pub ctx: &'c mut Context,
-	tys: TyDict,
 }
 
 
 impl<'c> Builder<'c> {
 	pub fn new (ctx: &'c mut Context) -> Self {
-		macro_rules! prims {
-			($(
-				($name:ident : $($tt:tt)+)
-			),+ $(,)?) => {
-				TyDict {
-					$(
-						$name: prims!(#ELEM# $name : $($tt)+)
-					),+
-				}
-			};
-
-			(#ELEM# $name:ident : $ty:ident) => {
-				ctx.add_ty(Ty {
-					data: TyData::Primitive(PrimitiveTy::$ty),
-					name: Some(stringify!($name).to_owned()),
-					.. Ty::default()
-				}).as_key()
-			};
-
-
-			(#ELEM# $name:ident : $expr:expr) => {
-				ctx.add_ty(Ty {
-					data: $expr,
-					name: Some(stringify!($name).to_owned()),
-					.. Ty::default()
-				}).as_key()
-			};
-		}
-
-		let tys = prims! [
-			(void: TyData::Void),
-			(block: TyData::Block),
-			(bool: Bool),
-			(sint8: SInt8), (sint16: SInt16), (sint32: SInt32), (sint64: SInt64), (sint128: SInt128),
-			(uint8: UInt8), (uint16: UInt16), (uint32: UInt32), (uint64: UInt64), (uint128: UInt128),
-			(real32: Real32), (real64: Real64),
-		];
-
-
-
-		Self { ctx, tys }
+		Self { ctx }
 	}
 
 	pub fn const_zero (&self, ty_key: impl AsKey<TyKey>) -> IrDataResult<Constant> {
@@ -891,25 +839,25 @@ impl<'c> Builder<'c> {
 		})
 	}
 
-	pub fn void_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.void).unwrap() }
-	pub fn block_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.block).unwrap() }
+	pub fn void_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.void).unwrap() }
+	pub fn block_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.block).unwrap() }
 
-	pub fn bool_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.bool).unwrap() }
+	pub fn bool_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.bool).unwrap() }
 
-	pub fn sint8_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint8).unwrap() }
-	pub fn sint16_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint16).unwrap() }
-	pub fn sint32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint32).unwrap() }
-	pub fn sint64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint64).unwrap() }
-	pub fn sint128_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.sint128).unwrap() }
+	pub fn sint8_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.sint8).unwrap() }
+	pub fn sint16_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.sint16).unwrap() }
+	pub fn sint32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.sint32).unwrap() }
+	pub fn sint64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.sint64).unwrap() }
+	pub fn sint128_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.sint128).unwrap() }
 
-	pub fn uint8_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint8).unwrap() }
-	pub fn uint16_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint16).unwrap() }
-	pub fn uint32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint32).unwrap() }
-	pub fn uint64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint64).unwrap() }
-	pub fn uint128_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.uint128).unwrap() }
+	pub fn uint8_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.uint8).unwrap() }
+	pub fn uint16_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.uint16).unwrap() }
+	pub fn uint32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.uint32).unwrap() }
+	pub fn uint64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.uint64).unwrap() }
+	pub fn uint128_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.uint128).unwrap() }
 
-	pub fn real32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.real32).unwrap() }
-	pub fn real64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.tys.real64).unwrap() }
+	pub fn real32_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.real32).unwrap() }
+	pub fn real64_ty (&self) -> Keyed<Ty> { self.ctx.tys.get_keyed(self.ctx.ty_dict.real64).unwrap() }
 
 
 	pub fn pointer_ty<K: AsKey<TyKey>> (&mut self, target_ty: K) -> IrDataResult<TyManipulator> {

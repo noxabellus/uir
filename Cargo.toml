@@ -16,6 +16,7 @@ support = { package = "uir-support", path = "./support" }
 core = { package = "uir-core", path = "./core" }
 cli = { package = "uir-cli", path = "./cli" }
 llvm-backend = { package = "uir-llvm-backend", path = "./backends/llvm", optional = true }
+c-backend = { package = "uir-c-backend", path = "./backends/c", optional = true }
 
 
 [features]
@@ -23,4 +24,4 @@ default = ["llvm-backend"]
 
 
 [workspace]
-members = [ "./support", "./core", "./backends/llvm", "./cli" ]
+members = [ "./support", "./core", "./backends/llvm", "./backends/c", "./cli" ]

@@ -12,5 +12,6 @@
 + Add pointer arithmetic
 + Create a wasm backend
 + Create an interpreter
++ User provided name mangler function
 + Generate RTTI tables such as type names and layouts
 + Generate JSON representation of items for external tools
