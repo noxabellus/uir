@@ -47,6 +47,10 @@ impl CString {
 	pub fn write_cstr (&mut self, cstr: impl ToCStr) {
 		self.write_str(cstr.to_cstr().as_str()).unwrap()
 	}
+
+	pub fn insert (&mut self, index: usize, value: u8) {
+		self.0.insert(index, value)
+	}
 }
 
 impl fmt::Write for CString {
@@ -272,14 +276,12 @@ impl CItem {
 
 
 
-pub type CNameInterner = dyn Fn(&CStr) -> CString;
-pub type CNameMangler = dyn Fn(&Ty, &CStr) -> CString;
 
-pub struct Emitter<'c, 'f> {
+pub struct Emitter<'c> {
 	pub ctx: &'c Context,
 	pub state: EmitterState,
-	pub name_interner: &'f CNameInterner,
-	pub name_mangler: &'f CNameMangler,
+	pub name_interner: Box<dyn FnMut (&mut CString)>,
+	pub name_mangler: Box<dyn FnMut (&Ty, &mut CString)>,
 }
 
 #[derive(Default)]
@@ -291,22 +293,26 @@ pub struct EmitterState {
 }
 
 
-impl<'c, 'f> Emitter<'c, 'f> {
-	pub fn new (ctx: &'c Context, name_interner: &'f CNameInterner, name_mangler: &'f CNameMangler) -> Self {
+impl<'c> Emitter<'c> {
+	pub fn new (ctx: &'c Context, name_interner: impl FnMut (&mut CString) + 'static, name_mangler: impl FnMut (&Ty, &mut CString) + 'static) -> Self {
 		Self {
 			ctx,
 			state: EmitterState::default(),
-			name_interner,
-			name_mangler,
+			name_interner: Box::new(name_interner) as Box<dyn FnMut (&mut CString)>,
+			name_mangler: Box::new(name_mangler) as Box<dyn FnMut (&Ty, &mut CString)>,
 		}
 	}
 
-	pub fn intern_name (&self, name: impl ToCStr) -> CString {
-		(self.name_interner)(name.to_cstr())
+	pub fn intern_name (&mut self, name: impl ToCString) -> CString {
+		let mut name = name.to_cstring();
+		(self.name_interner)(&mut name);
+		name
 	}
 
-	pub fn mangle_name (&self, ty: &Ty, name: impl ToCStr) -> CString {
-		(self.name_mangler)(ty, name.to_cstr())
+	pub fn mangle_name (&mut self, ty: &Ty, name: impl ToCString) -> CString {
+		let mut name = name.to_cstring();
+		(self.name_mangler)(ty, &mut name);
+		name
 	}
 
 	pub fn create_anon_id (&self, key: impl Key) -> impl fmt::Display {
@@ -466,13 +472,13 @@ impl<'c, 'f> Emitter<'c, 'f> {
 				=> {
 					let ctarget = self.emit_ty(*target_ty);
 
-					(cformat!("{}*", ctarget.name), name!(cformat!("{}_$ptr", ctarget.name)))
+					(cformat!("{}*", ctarget.name), name!(cformat!("{}_{}", ctarget.name, self.intern_name("ptr"))))
 				}
 
 				TyData::Array { length, element_ty } => {
 					let celem = self.emit_ty(*element_ty);
 
-					(cformat!("struct {{ {}[{}] data; }}", celem.name, length), name!(cformat!("{}_$arr{}", celem.name, length)))
+					(cformat!("struct {{ {}[{}] data; }}", celem.name, length), name!(cformat!("{}_{}{}", celem.name, self.intern_name("arr"), length)))
 				}
 
 				TyData::Vector { length, element_ty } => {
@@ -484,7 +490,7 @@ impl<'c, 'f> Emitter<'c, 'f> {
 					}
 					cwrite!(body, "}}");
 
-					(body, name!(cformat!("{}_{}", celem.name, self.intern_name(&cformat!("vec_{}", length)))))
+					(body, name!(cformat!("{}_{}{}", celem.name, self.intern_name("vec"), length)))
 				}
 
 				TyData::Structure { field_tys } => {
@@ -539,7 +545,7 @@ fn test_emitter () {
 	let pty = builder.pointer_ty(s32).unwrap().as_key();
 
 
-	let mut e = Emitter::new(&ctx, &|val| cformat!("$${}", val), &|_ty, basename| basename.to_cstring());
+	let mut e = Emitter::new(&ctx, |val| val.insert(0, b'$'), |_ty, _basename| ());
 
 	let (ty, constant) = e.emit_constant(&Constant::Null(pty));
 	let cty = e.emit_ty(ty);
