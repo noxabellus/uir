@@ -50,7 +50,7 @@ impl Src {
         } else {
           r
         }
-      };
+      }
 
       search(slice, 0, slice.len() - 1, value)
     }

@@ -451,7 +451,7 @@ fn optimize_get_set_element () {
 
 
 #[test]
-fn fib () -> IrResult {
+fn fib () {
 	let mut context = Context::with_target(target::AMD64);
 	let mut builder = Builder::new(&mut context);
 	let mut f = FunctionBuilder::new(&mut builder);
@@ -528,14 +528,11 @@ fn fib () -> IrResult {
 	println!("{:?}", llfunc);
 
 	llfunc.verify_function(LLVMAbortProcessAction);
-
-
-	Ok(())
 }
 
 
 #[test]
-fn jit_fib () -> IrResult {
+fn jit_fib () {
 	let mut context = Context::with_target(target::AMD64);
 	let mut builder = Builder::new(&mut context);
 	let mut f = FunctionBuilder::new(&mut builder);
@@ -626,7 +623,7 @@ fn jit_fib () -> IrResult {
 	fn nat_fib (n: i32) -> i32 {
 		if n < 2 { n }
 		else { nat_fib(n-1) + nat_fib(n-2) }
-	};
+	}
 
 	let n = 17;
 	let t = nat_fib(n);
@@ -636,8 +633,6 @@ fn jit_fib () -> IrResult {
 	println!("nat_fib({}) = {}", n, t);
 	println!("fib({}) = {}", n, x);
 	assert_eq!(t, x);
-
-	Ok(())
 }
 
 

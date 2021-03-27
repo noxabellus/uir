@@ -51,7 +51,7 @@ mod test {
 	}
 
 	#[test]
-	fn add () -> IrResult {
+	fn add () {
 		let mut context = Context::with_target(target::AMD64);
 		let mut builder = Builder::new(&mut context);
 		let mut f = FunctionBuilder::new(&mut builder);
@@ -86,13 +86,11 @@ mod test {
 		let output = format!("{}", PrinterState::new(&context).with_possible_error(error).print_self());
 		write(&path, &output).unwrap();
 		println!("{}", &output);
-
-		Ok(())
 	}
 
 
 	#[test]
-	fn fib () -> IrResult {
+	fn fib () {
 		let mut context = Context::with_target(target::AMD64);
 		let mut builder = Builder::new(&mut context);
 		let mut f = FunctionBuilder::new(&mut builder);
@@ -167,14 +165,11 @@ mod test {
 		let output = format!("{}", PrinterState::new(&context).with_possible_error(error).print_function(function));
 		write(&path, &output).unwrap();
 		println!("{}", &output);
-
-		Ok(())
 	}
 
 	#[test]
-	fn function_builder () -> IrResult {
-		add()?;
-		fib()?;
-		Ok(())
+	fn function_builder () {
+		add();
+		fib();
 	}
 }

@@ -64,9 +64,9 @@ enum RegClass {
 	SSEInt32,
 	SSEInt64,
 	SSEUp,
-	X87,
-	X87Up,
-	ComplexX87,
+	// X87,
+	// X87Up,
+	// ComplexX87,
 	Memory,
 }
 
@@ -95,8 +95,8 @@ impl RegClass {
 			| SSEDv
 			=> SSEUp,
 
-			X87
-			=> X87Up,
+			// X87
+			// => X87Up,
 
 			_ => return None
 		})
@@ -110,7 +110,7 @@ impl RegClass {
 	fn is_mem_cls (cls: &[RegClass], attribute: ArgAttr) -> bool {
 		let first = if let Some(f) = cls.first() { *f } else { return false };
 
-			(attribute == ByVal && matches!(first, Memory | X87 | ComplexX87))
+			(attribute == ByVal && matches!(first, Memory/* | X87 | ComplexX87*/))
 		|| (attribute == SRet && matches!(first, Memory))
 	}
 
@@ -298,10 +298,10 @@ fn unify (cls: &mut [RegClass], i: u32, newv: RegClass) {
 		| (Int, _) | (_, Int)
 		=> { },
 
-		| (x @ X87, _) | (x, X87)
-		| (x @ X87Up, _) | (x, X87Up)
-		| (x @ ComplexX87, _) | (x, ComplexX87)
-		=> *x = Memory,
+		// | (x @ X87, _) | (x, X87)
+		// | (x @ X87Up, _) | (x, X87Up)
+		// | (x @ ComplexX87, _) | (x, ComplexX87)
+		// => *x = Memory,
 
 		(x, y) => *x = y,
 	}
@@ -328,7 +328,8 @@ fn fixup (ty: LLVMType, cls: &mut [RegClass]) {
 		while let Some(cl) = iter.next() {
 			match cl {
 				| Memory
-				| X87Up => {
+				// | X87Up
+				=> {
 					RegClass::all_mem(cls);
 					break
 				}
